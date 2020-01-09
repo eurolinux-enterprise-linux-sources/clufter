@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -424,7 +424,23 @@ cib2pcscmd = ('''\
 ''' + (
         verbose_inform('"new stonith: ", @id')
 ) + '''
-        <xsl:value-of select="concat($pcscmd_pcs, 'stonith create',
+        <xsl:variable name="PcsStonithCmd">
+            <xsl:choose>
+            <!-- "pcs stonith create ID external/EXT" only supported
+                 with certain newer versions of pcs
+                 (https://github.com/ClusterLabs/pcs/issues/81) -->
+                <xsl:when test="$pcscmd_extra_agents_via_pacemaker
+                                or
+                                not(starts-with(@type, 'external/'))">
+                    <xsl:value-of select="$pcscmd_pcs"/>
+                </xsl:when>
+                <xsl:otherwise>
+                    <xsl:message>%(stonith_external_msg)s</xsl:message>
+                    <xsl:value-of select="concat($pcscmd_pcs, '--force ')"/>
+                </xsl:otherwise>
+            </xsl:choose>
+        </xsl:variable>
+        <xsl:value-of select="concat($PcsStonithCmd, 'stonith create',
                                      ' ', @id,
                                      ' ', @type)"/>
 ''' + (
@@ -456,8 +472,17 @@ cib2pcscmd = ('''\
         ORDINARY/CLONE/MASTER CLUSTER RESOURCES
      -->
 
-    <!-- primitives -->
-    <xsl:for-each select=".//primitive[@class != 'stonith']">
+    <!-- bundles -->
+    <clufter:descent-mix at="bundle"/>
+
+    <!-- primitives (can depend on bundle, but only if supported) -->
+    <xsl:for-each select=".//primitive[@class != 'stonith'
+                                       and
+                                       (
+                                           name(..) != 'bundle'
+                                           or
+                                           $pcscmd_extra_bundle
+                                       )]">
         <xsl:variable name="ResourceSpec">
             <xsl:choose>
                 <xsl:when test="@class = 'ocf'">
@@ -480,6 +505,11 @@ cib2pcscmd = ('''\
             <xsl:when test="name(..) = 'master'">
 ''' + (
                 verbose_inform('"new resource: ", @id, " (to be set as master)"')
+) + '''
+            </xsl:when>
+            <xsl:when test="name(..) = 'bundle'">
+''' + (
+                verbose_inform('"new resource: ", @id, " (being added to bundle)"')
 ) + '''
             </xsl:when>
             <xsl:otherwise>
@@ -514,6 +544,11 @@ cib2pcscmd = ('''\
 ''' + (
         attrset_xsl("meta_attributes", cmd='" meta"')
 ) + '''
+        <!-- possible containment within (existing) bundle -->
+        <xsl:if test="name(..) = 'bundle'">
+            <xsl:value-of select="concat(' bundle', ' ', ../@id)"/>
+        </xsl:if>
+
         <!-- NOTE clone/master resource specifics handled separately later -->
         <xsl:value-of select="'%(NL)s'"/>
 ''' + (
@@ -521,7 +556,7 @@ cib2pcscmd = ('''\
 ) + '''
 
         <!-- "pcs resource utilization" only supported with certain newer
-             versions of pcs -->
+             versions of pcs (https://bugzilla.redhat.com/1158500) -->
         <xsl:choose>
             <xsl:when test="$pcscmd_extra_utilization">
 ''' + (
@@ -548,7 +583,7 @@ cib2pcscmd = ('''\
 
     <!-- templates -->
     <xsl:if test="template">
-        <xsl:message terminate="true"
+        <xsl:message terminate="yes"
         >Cannot convert templates to pcs commands yet [https://bugzilla.redhat.com/1281359]</xsl:message>
     </xsl:if>
 
@@ -556,6 +591,10 @@ cib2pcscmd = ('''\
     NL=NL,
     utilization_msg="WARNING: target pcs version does not support utilization"
                     " attributes, hence omitted",
+    stonith_external_msg="WARNING: target pcs version does not support"
+                         " getting agents metadata through pacemaker, hence"
+                         " special stonith case of external/* needs to be"
+                         " passed by force",
 )
 
 ###

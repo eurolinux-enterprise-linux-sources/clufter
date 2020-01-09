@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 
@@ -40,6 +40,7 @@ ccs_artefacts = artefact_cond('@keyfile', kind='F', desc='totem keyfile')
 
 ###
 
+ccspcmk2pcscmd_rrp_mode = ('active', 'passive')
 # 1:1 mapping of supported params to pcs arguments (not: rrpmode)
 ccspcmk2pcscmd_supported = (
     'consensus',
@@ -58,8 +59,23 @@ ccspcmk2pcscmd = '''\
             <xsl:value-of select="concat(' --', name(), ' ', .)"/>
         </xsl:if>
     </xsl:for-each>
-    <xsl:if test="@rrp_mode">
+
+    <!-- rrpmode -->
+    <xsl:if test="
+''' + (
+    xslt_is_member('@rrp_mode', ccspcmk2pcscmd_rrp_mode)
+) + '''">
         <xsl:value-of select="concat(' --rrpmode ', @rrp_mode)"/>
     </xsl:if>
+
     <clufter:descent-mix at="interface"/>
+
+    <!-- corosync encryption _disabling_ (not possible) -->
+    <xsl:if test="@secauth = 'off'">
+        <xsl:message>
+            <xsl:value-of select="concat('WARNING: no encryption requested,',
+                                         ' but current pcs not capable to',
+                                         ' disable it for CMAN')"/>
+        </xsl:message>
+    </xsl:if>
 '''

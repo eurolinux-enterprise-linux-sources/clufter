@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """XML helpers"""
@@ -9,6 +9,7 @@ from lxml import etree
 
 from .error import ClufterPlainError
 from .utils import selfaware
+from .utils_2to3 import basestring, foreach_u, iter_items
 from .utils_func import bifilter
 
 
@@ -19,9 +20,12 @@ NAMESPACES = {
 }
 
 # X=x and X_NS=url for each (x, url) in NAMESPACES
-map(lambda ns: globals().setdefault(ns.upper(), ns), NAMESPACES.iterkeys())
-map(lambda (ns, url): globals().setdefault(ns.upper() + '_NS', url),
-    NAMESPACES.iteritems())
+foreach_u(
+    lambda ns, url:
+        foreach_u(lambda k, v: globals().setdefault(k, v),
+                  ((ns.upper(), ns), (ns.upper() + '_NS', url))),
+    iter_items(NAMESPACES)
+)
 
 
 class UtilsXmlError(ClufterPlainError):

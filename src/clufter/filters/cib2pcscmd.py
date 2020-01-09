@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """cib2pcscmd filter"""
@@ -47,7 +47,7 @@ def attrset_xsl(attrset, cmd=None, inform=None):
 ''').format(NL=NL, attrset=attrset, cmd=cmd)
 
 
-@XMLFilter.deco('cib', 'string-list', defs=dict(
+@XMLFilter.deco('cib-2', 'string-list', defs=dict(
     pcscmd_force=False,
     pcscmd_verbose=True,
     pcscmd_tmpcib='tmp-cib.xml',
@@ -77,6 +77,36 @@ def cib2pcscmd(flt_ctxt, in_obj):
                 )),
                 pcscmd_extra_alerts = bool(infer(
                     'comp:pacemaker[alerts] + comp:pcs[alerts]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_agents_via_pacemaker = bool(infer(
+                    'comp:pcs[agents-via-pacemaker]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_acls = bool(infer(
+                    'comp:pacemaker[schema-2.0] + comp:pcs[acls]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_push_diff  = bool(infer(
+                    'comp:pcs[push-diff]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_bundle = bool(infer(
+                    'comp:pacemaker[bundle] + comp:resource-agents[docker] + comp:pcs[bundle]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_bundle_meta = bool(infer(
+                    'comp:pacemaker[bundle] + comp:pcs[bundle-meta]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_alerts_select = bool(infer(
+                    'comp:pacemaker[schema-2.10] + comp:pcs[alerts-select]',
                     flt_ctxt['system'],
                     flt_ctxt['system_extra'],
                 )),

@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """ccs2ccsflat filter"""
@@ -11,6 +11,7 @@ from subprocess import PIPE
 from sys import stdin
 
 from ..filter import Filter, FilterError
+from ..utils_2to3 import basestring, str_enc
 from ..utils_prog import OneoffWrappedStdinPopen, dirname_x, which
 
 try:
@@ -50,9 +51,9 @@ def ccs2ccsflat(flt_ctxt, in_obj):
     except OSError:
         raise FilterError(self, "error running ccs_flatten binary")
     out, err = proc.communicate()
-    if proc.returncode != 0 or out == '' and err != '':
+    if proc.returncode != 0 or (not out and err):
         raise FilterError(self, "ccs_flatten {0}\n\t{1}",
                           ("exit code: {0}" if proc.returncode > 0 else
                            "killing signal: {0}").format(abs(proc.returncode)),
-                          err)
+                           str_enc(err, 'utf-8'))
     return ('bytestring', out)

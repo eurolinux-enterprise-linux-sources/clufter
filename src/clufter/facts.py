@@ -1,17 +1,28 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2018 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Utility functions wrt. cluster systems in general"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
+from functools import reduce
+try:
+    from itertools import chain, zip_longest
+except ImportError:  # PY2 backward compatibility
+    from itertools import chain, izip_longest as zip_longest
 from logging import getLogger
+from operator import add
 
+from .error import ClufterPlainError
 from .utils import args2sgpl
+from .utils_2to3 import basestring, enumerate_u, iter_items, iter_values, \
+                        reduce_u
 from .utils_func import apply_intercalate
 
 log = getLogger(__name__)
 
+class FactsError(ClufterPlainError):
+    pass
 
 #
 # EXECUTABLE KNOWLEDGE ABOUT THE CLUSTER PACKAGES PER SYSTEM/DISTROS
@@ -56,9 +67,17 @@ cluster_map = {
                 }),
                 ((9, ), {
                     # https://packages.debian.org/stretch/$PACKAGE
-                    'corosync':                      (2, 3, 5),
-                    'pacemaker[+coro]':              (1, 1, 15),
-                    'resource-agents':               (3, 9, 7),
+                    'corosync':                      (2, 4, 2),
+                    'pacemaker[+coro]':              (1, 1, 16),
+                    'pcs':                           (0, 9, 155),
+                    'resource-agents':               (4, 0, 0),  # rc1
+                }),
+                # currently a moving target
+                ((10, ), {
+                    # https://packages.debian.org/buster/$PACKAGE
+                    'pacemaker[+coro]':              (1, 1, 18),  # rc3
+                    'pcs':                           (0, 9, 161),
+                    'resource-agents':               (4, 0, 1),
                 }),
             ),
             'fedora': (
@@ -135,10 +154,32 @@ cluster_map = {
                     'resource-agents':               (3, 9, 7),
                 }),
                 ((25, ), {
-                    'corosync':                      (2, 4),
+                    'corosync':                      (2, 4, 1),
                     #'pacemaker[+coro]':              (1, 1, 16),  # updates
                     'pcs':                           (0, 9, 154),
                 }),
+                ((26, ), {
+                    'corosync':                      (2, 4, 2),
+                    'pacemaker[+coro]':              (1, 1, 17),
+                    'pcs':                           (0, 9, 156),
+                    'resource-agents':               (4, 0, 1),
+                }),
+                ((27, ), {
+                    #'corosync':                      (2, 4, 3),  # updates
+                    #'pacemaker[+coro]':              (1, 1, 18), # updates
+                    'pcs':                           (0, 9, 159),
+                }),
+                ((28, ), {
+                    'corosync':                      (2, 4, 3),
+                    'pacemaker[+coro]':              (1, 1, 18),
+                    'pcs':                           (0, 9, 160),
+                }),
+                # rawhide, i.e., moving target...
+                #((28, 999), {
+                #}),
+                # coming...
+                #((29, ), {
+                #}),
             ),
             'redhat': (
                 ((6, 0), {
@@ -181,7 +222,10 @@ cluster_map = {
                 }),
                 ((6, 9), {
                     'pacemaker[+cman]':              (1, 1, 15),
-                    'pcs':                           (0, 9, 155),  # XXX guess
+                    'pcs[-agents-via-pacemaker]':    (0, 9, 155),
+                }),
+                ((6, 10), {
+                    'pacemaker[+cman]':              (1, 1, 18),  # guess
                 }),
                 ((7, 0), {
                     'corosync':                      (2, 3),
@@ -198,6 +242,8 @@ cluster_map = {
                 ((7, 1), {
                     'pacemaker[+coro]':              (1, 1, 12),
                     'pcs':                           (0, 9, 137),
+                     # https://bugzilla.redhat.com/1158500
+                    'resource-agents[+docker]':      (3, 9, 5),
                 }),
                 ((7, 2), {
                     'pacemaker[+coro]':              (1, 1, 13),
@@ -207,6 +253,17 @@ cluster_map = {
                     'corosync':                      (2, 4),
                     'pacemaker[+coro]':              (1, 1, 15),
                     'pcs':                           (0, 9, 153),  # 152+patches
+                }),
+                ((7, 4), {
+                    'pacemaker[+coro,+bundle]':      (1, 1, 16),
+                    'pcs':                           (0, 9, 158),
+                }),
+                # coming...
+                ((7, 5), {
+                    'corosync':                      (2, 4, 3),    # guess
+                    'pacemaker[+coro]':              (1, 1, 18),   # guess
+                    'pcs':                           (0, 9, 162),  # guess
+
                 }),
             ),
             'ubuntu': (
@@ -244,11 +301,49 @@ cluster_map = {
                     'pacemaker[+coro]':              (1, 1, 15),
                     'pcs':                           (0, 9, 153),  # universe
                 }),
+                ((17, 4), {
+                    # https://packages.ubuntu.com/zesty/$PACKAGE
+                    'corosync':                      (2, 4),
+                    'pacemaker[+coro]':              (1, 1, 16),
+                    'pcs':                           (0, 9, 155),  # universe
+                    'resource-agents':               (4, 0, 0),
+                }),
+                ((17, 10), {
+                    # https://packages.ubuntu.com/artful/$PACKAGE
+                    'pcs':                           (0, 9, 159),  # universe
+                    'resource-agents':               (4, 0, 1),
+                }),
+            ),
+        },
+    'bsd':
+        {
+            'freebsd': (
+                ((10, 4), {
+                    # https://svnweb.freebsd.org/ports/tags/RELEASE_10_4_0/net/$PACKAGE
+                    'corosync':                      (2, 4, 2),
+                    'pacemaker[+coro]':              (1, 1, 16),
+                    'resource-agents':               (4, 0, 1),
+                    #---
+                    'sys::init-sys':                'bsdinit',
+                }),
+                ((11, 0), {
+                    # https://svnweb.freebsd.org/ports/tags/RELEASE_11_0_0/net/$PACKAGE
+                    'corosync':                      (2, 3, 5),
+                    'pacemaker[+coro]':              (1, 1, 14),
+                    'resource-agents':               (3, 9, 7),
+                }),
+                ((11, 1), {
+                    # https://svnweb.freebsd.org/ports/tags/RELEASE_11_1_0/net/$PACKAGE
+                    'corosync':                      (2, 4, 2),
+                    'pacemaker[+coro]':              (1, 1, 16),
+                    'resource-agents':               (4, 0, 1),
+                }),
             ),
         },
 }
 
-supported_dists = cluster_map['linux'].keys()
+def supported_dists(sys):
+    return cluster_map.get(sys, {}).keys()
 
 # mere aliases of the distributions (packages remain the same),
 # i.e., downstream rebuilders;
@@ -276,11 +371,17 @@ aliases_rel = {
         'needle':     '2',
     },
     'debian': {  # because of http://bugs.python.org/issue9514 @ 2.6 ?
-        'squeeze':    '6',
-        'wheezy':     '7',
-        'jessie':     '8',
-        'stretch':    '9',
-        'stretch/sid': '9.999',  # XXX ?
+        'squeeze':      '6',
+        'wheezy':       '7',
+        'jessie':       '8',
+        'stretch':      '9',
+        'buster':      '10',
+        #'buster/sid':  '10.999',  # XXX ?
+        #'bullseye':    '11',
+    },
+    'fedora': {
+        '28':         '27.999',
+        'rawhide':    '27.999',
     },
     'ubuntu': {
         '13.04':      '13.4',
@@ -295,8 +396,12 @@ aliases_rel = {
         '16.04':      '16.4',
         'xenial':     '16.4',   # Xenial Xerus
         'yakkety':    '16.10',  # Yakkety Yak
-        #'17.04':      '17.4',
-        #'zesty':      '17.4',   # Zesty Zapus
+        '17.04':      '17.4',
+        'zesty':      '17.4',   # Zesty Zapus
+        'artful':     '17.10',  # Artful Aardvark
+        # https://wiki.ubuntu.com/BionicBeaver/ReleaseSchedule
+        #'bionic':     '18.4',
+        #'18.04':      '18.4',   # Bionic Beaver
     }
 }
 
@@ -305,12 +410,18 @@ versions_extra = {
     'corosync': (
         ((2, 4),
             '+qdevice,+qnet'),
+        ((2, 4, 3),
+            '+qdevice-heuristics'),
+        # tentative
+        #((3, ),
+        #    '+kronosnet'),
     ),
     'pacemaker': (
+        # see also http://wiki.clusterlabs.org/wiki/ReleaseCalendar
         ((1, 1, 8),
             '+schema-1.2'),
         ((1, 1, 12),
-            '+acls,+schema-2.0'),
+            '+schema-2.0'),  # implies new style ACLs
         ((1, 1, 13),
             '+schema-2.3'),
         ((1, 1, 14),
@@ -319,17 +430,57 @@ versions_extra = {
             '+alerts,+schema-2.5'),
         ((1, 1, 16),
             '+schema-2.6'),
+        ((1, 1, 17),
+            # note that for our purposes, bundle ~ bundle-extra
+            '+bundle,+schema-2.9'),
+        ((1, 1, 18),
+            '+schema-2.10'),
+        # tentative
+        # corosync is now required unconditionally
+        #((2, 0, 0),
+        #    '+corosync,+schema-3.0'),
     ),
     'pcs': (
+        ((0, 9, 123),
+            '+acls'),
         ((0, 9, 145),
             '+node-maintenance'),
         ((0, 9, 148),
-            '+utilization'),
+            '+utilization'),  # https://bugzilla.redhat.com/1158500
         ((0, 9, 150),
             '+wait-cluster-start'),
         ((0, 9, 153),
             # qdevice+qnet preliminary support since 0.9.151, but...
             '+alerts,+qdevice,+qnet'),
+        ((0, 9, 155),
+            # this also implies support for external/* stonith agents
+            '+agents-via-pacemaker'),  # https://github.com/ClusterLabs/pcs/issues/81
+        # http://lists.clusterlabs.org/pipermail/users/2017-February/005103.html
+        ((0, 9, 156),
+            # this is best accompanied with following Pacemaker/crm_diff bugfix
+            # https://github.com/ClusterLabs/pacemaker/commit/20a74b9d37
+            '+push-diff'),
+        # http://lists.clusterlabs.org/pipermail/users/2017-May/005824.html
+        ((0, 9, 158),
+            # https://bugzilla.redhat.com/1433016
+            # and https://bugzilla.redhat.com/1165821, respectively
+            '+bundle,+corosync-encryption-forced'),
+        # http://oss.clusterlabs.org/pipermail/users/2017-June/005965.html
+        ((0, 9, 159),
+            # https://bugzilla.redhat.com/1447910
+            # and https://bugzilla.redhat.com/1165821, respectively (1+2)
+            '+bundle-meta,-corosync-encryption-forced,+corosync-encryption'),
+        # http://oss.clusterlabs.org/pipermail/users/2017-October/006590.html
+        #((0, 9, 160),
+        #    ),
+        # http://oss.clusterlabs.org/pipermail/users/2017-November/006744.html
+        #((0, 9, 161),
+        #    ),
+        # https://oss.clusterlabs.org/pipermail/users/2018-February/014530.html
+        ((0, 9, 162),
+            '+qdevice-heuristics'),
+        #((0, 9, 163),
+        #    ),
     ),
     'resource-agents': (
         # http://lists.linux-ha.org/pipermail/linux-ha/2011-June/043321.html
@@ -349,10 +500,22 @@ versions_extra = {
         #    ),
         # http://lists.linux-ha.org/pipermail/linux-ha/2015-January/048523.html
         # XXX clvm
-        #((3, 9, 6),
-        #    ),
+        ((3, 9, 6),
+            '+docker'),
         # http://oss.clusterlabs.org/pipermail/users/2016-February/002216.html
         #((3, 9, 7),
+        #    ),
+        # http://oss.clusterlabs.org/pipermail/users/2017-January/004919.html
+        #((4, 0, 0),
+        #    ),
+        # http://oss.clusterlabs.org/pipermail/users/2017-February/004957.html
+        #((4, 0, 1),
+        #    ),
+        # http://oss.clusterlabs.org/pipermail/users/2017-November/006871.html
+        #((4, 1, 0),
+        #    ),
+        # https://oss.clusterlabs.org/pipermail/users/2018-March/014578.html
+        #((4, 1, 1),
         #    ),
     ),
 }
@@ -366,19 +529,30 @@ def _parse_ver(s):
     if ver:
         try:
             ver = aliases_rel[name][ver]
+            log.debug("resolved: {0}".format(ver))
         except KeyError:
             pass
         ver = tuple(map(int, ver.split('.')))
     return name, ver
 
 
-def _cmp_ver(v1, v2):
+def _cmp_ver(v1, v2, asymmetric=False):
+    """Compare two given encodings of the version
+
+    Parameters:
+        v1            first operand (version tuple if not None)
+        v2            second operand (version tuple if not None)
+        asymmetric    do not compare absolutely, just the prefix match
+    """
     if v1 and v2:
-        v1, v2 = list(reversed(v1)), list(reversed(v2))
-        while v1 and v2:
-            ret = cmp(v1.pop(), v2.pop())
-            if ret:
-                return ret
+        len_v1, len_v2 = len(v1), len(v2)
+        len_shorter = len_v1 if len_v1 <= len_v2 else len_v2
+        for i, i1, i2 in enumerate_u(zip_longest(v1, v2, fillvalue=0)):
+            if i1 == i2:
+                continue
+            if asymmetric and i > len_shorter:
+                break
+            return 1 if i1 > i2 else -1
     return 0
 
 
@@ -466,7 +640,7 @@ def infer_sys(sys, branches=None):
     if branches is None:
         branches = [cluster_map]
     if sys == "*":
-        return apply_intercalate([b.values() for b in branches])
+        return apply_intercalate([list(iter_values(b)) for b in branches])
     return [b[sys] for b in branches if sys in b]
 
 
@@ -479,7 +653,7 @@ def infer_dist(dist, branches=None):
         branches = infer_sys('*')  # alt.: branches = [cluster_map.values()]
     if dist == '*':
         return apply_intercalate([per_distver[1] for b in branches
-                                  for per_dist in b.itervalues()
+                                  for per_dist in iter_values(b)
                                   for per_distver in per_dist])
     ret = []
     dist, dist_ver = _parse_ver(dist)
@@ -488,12 +662,13 @@ def infer_dist(dist, branches=None):
     except KeyError:
         pass
     for b in branches:
-        for d, d_branches in b.iteritems():
+        for d in b:
             if d == dist:
                 # first time, we (also) traverse whole sequence of per-distro
                 # releases, in-situ de-sparsifying particular packages releases;
                 # to avoid needlessly repeated de-sparsifying, we are using
                 # '__proceeded__' mark to denote already proceeded dicts
+                d_branches = b[d]
                 cur_acc = {}
                 if '__proceeded__' not in d_branches or dist_ver:
                     for i, (dver, dver_branches) in enumerate(d_branches):
@@ -509,7 +684,7 @@ def infer_dist(dist, branches=None):
                         if '__proceeded__' in dver_branches:
                             continue  # only searching, no hit yet
 
-                        for k, v in dver_branches.iteritems():
+                        for k, v in iter_items(dver_branches):
                             kk, k_extra = _parse_extra(k, version=v,
                                                        version_map=versions_extra)
 
@@ -544,13 +719,15 @@ def infer_comp(comp, branches=None):
     comp, comp_ver = _parse_ver(comp)
     comp, comp_extra = _parse_extra(comp)
     for b in branches:
-        for c, c_ver in b.iteritems():
+        for c, c_ver in iter_items(b):
             c, c_extra = _parse_extra(c)
-            if (c == comp
-                and (not comp_extra or not comp_extra.difference(c_extra))
-                and _cmp_ver(comp_ver, c_ver) == 0):
-                    ret.append(b)
-                    break
+            if c == comp:
+                if (isinstance(c_ver, tuple)
+                        and _cmp_ver(comp_ver, c_ver, asymmetric=True) > 0
+                        or comp_extra and comp_extra.difference(c_extra)):
+                    continue
+                ret.append(b)
+                break
 
     return ret
 
@@ -615,6 +792,8 @@ def infer(query, system=None, system_extra=None):
         inference_rule = inference_rules.get(q_type, rule_error)[1]
         if q_type != level:
             prev = ret
+        if not q_content:
+            raise FactsError("Cannot resolve `{0}' when empty".format(q_type))
         inferred = inference_rule(q_content, prev)
         log.debug("inferred: {0}".format(inferred))
         ret = [i for i in ret if i in inferred] if q_type == level else inferred
@@ -717,24 +896,24 @@ def cluster_unknown(*sys_id):
     return not(any(cluster_sys(*sys_id) for cluster_sys in cluster_systems))
 
 
-def format_dists(verbosity=0, aliases_dist_inv={}, aliases_rel_inv={}):
+def format_dists(verbosity=0, sys='', aliases_dist_inv={}, aliases_rel_inv={}):
     # need to flip the translation tables first (if not already)
     if not aliases_dist_inv:
-        aliases_dist_inv.update(reduce(
-            lambda acc, (k, v): (acc.setdefault(v, []).append(k), acc)[1],
-            aliases_dist.iteritems(), {}
+        aliases_dist_inv.update(reduce_u(
+            lambda acc, k, v: (acc.setdefault(v, []).append(k), acc)[1],
+            iter_items(aliases_dist), {}
         ))
     if not aliases_rel_inv:
         aliases_rel_inv.update((
             k,
-            reduce(
-                lambda a, (ik, iv): (a.setdefault(iv, []).append(ik), a)[1],
-                v.iteritems(), {}
+            reduce_u(
+                lambda a, ik, iv: (a.setdefault(iv, []).append(ik), a)[1],
+                iter_items(v), {}
             )
-        ) for k, v in aliases_rel.iteritems() if k in supported_dists)
+        ) for k, v in iter_items(aliases_rel) if k in supported_dists(sys))
 
-    return '\n'.join('\n\t'.join(
-        args2sgpl(
+    return '\n'.join(chain(*reduce(add, (((system.join(('### ', ' ###')), ),
+        ('\n\t'.join(args2sgpl(
             '\t# aliases: '.join(
                 args2sgpl(k, *filter(
                     len, ('|'.join(sorted(aliases_dist_inv.get(k, ()))), )
@@ -754,5 +933,7 @@ def format_dists(verbosity=0, aliases_dist_inv={}, aliases_rel_inv={}):
                 ) for vv in (v if verbosity else (v[0], ('..', ), v[-1]))
                 for vvv in ('.'.join(str(i) for i in vv[0]), )
             )
-        )
-    ) for k, v in sorted(cluster_map['linux'].iteritems()))
+        )) for k, v in sorted(iter_items(system_map)))
+    ) for system, system_map in sorted(iter_items(cluster_map))
+        if verbosity or not(sys) or system == sys
+    ))))

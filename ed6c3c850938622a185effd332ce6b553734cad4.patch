@@ -1,0 +1,86 @@
+From ed6c3c850938622a185effd332ce6b553734cad4 Mon Sep 17 00:00:00 2001
+From: Jan Pokorný <jpokorny@redhat.com>
+Date: Mar 15 2018 17:58:14 +0000
+Subject: 2to3 follow-up: clean the rough edges wrt. text/data cut in tests
+
+
+Previous " 2to3: PY3 distinguishes text (abstract type) and data
+(raw bytes)" commit (possibly with other follow-ups on top) changes
+how some data are represented internally, and apparently it still
+causes issues in the test suite when run under Python 2.
+Hence to retain the compatibility, ensure the type match.
+
+Signed-off-by: Jan Pokorný <jpokorny@redhat.com>
+
+---
+
+diff --git a/tests/ccs2needle_xslt.py b/tests/ccs2needle_xslt.py
+index 45618c8..ca69b7f 100644
+--- a/tests/ccs2needle_xslt.py
++++ b/tests/ccs2needle_xslt.py
+@@ -1,5 +1,5 @@
+ # -*- coding: UTF-8 -*-
+-# Copyright 2017 Red Hat, Inc.
++# Copyright 2018 Red Hat, Inc.
+ # Part of clufter project
+ # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+ 
+@@ -23,6 +23,7 @@ from lxml import etree
+ 
+ from .filter import XMLFilter
+ from .format_manager import FormatManager
++from .utils_2to3 import str_enc
+ 
+ WALK_DIR = join(dirname(modules[XMLFilter.__module__].__file__), 'filters')
+ 
+@@ -40,8 +41,9 @@ class Ccs2NeedleXsltViewOnly(TestCase):
+         in_obj = formats['ccs']('file', join(dirname(__file__), 'filled.conf'))
+         r = flt.get_template(in_obj, symbol='ccs2needlexml', root_dir=WALK_DIR)
+         ret = r if isinstance(r, list) else [r]
+-        print("\n".join((etree.tostring(i, encoding='unicode', pretty_print=True)
+-                         for i in ret)))
++        print("\n".join(str_enc(etree.tostring(i, encoding='UTF-8',
++                                               pretty_print=True), 'utf-8')
++                        for i in ret))
+ 
+         assert not isinstance(r, list)
+ 
+diff --git a/tests/filter.py b/tests/filter.py
+index a915fb5..23cd30e 100644
+--- a/tests/filter.py
++++ b/tests/filter.py
+@@ -1,5 +1,5 @@
+ # -*- coding: UTF-8 -*-
+-# Copyright 2017 Red Hat, Inc.
++# Copyright 2018 Red Hat, Inc.
+ # Part of clufter project
+ # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+ 
+@@ -25,7 +25,7 @@ from .format import formats
+ formats = formats.plugins
+ from .formats.ccs import ccs
+ from .filter import XMLFilter
+-from .utils_2to3 import bytes_enc
++from .utils_2to3 import str_enc
+ 
+ WALK_DIR = join(dirname(__file__), 'XMLFormat-walk')
+ 
+@@ -57,7 +57,7 @@ class XMLTraverse(TestCase):
+         #print("\n".join([etree.tostring(i) for i in ret]))  # --> expected
+ 
+         assert not isinstance(r, list)
+-        self.assertEqual(etree.tostring(r, encoding='unicode'),
++        self.assertEqual(str_enc(etree.tostring(r, encoding='UTF-8'), 'utf-8'),
+                          RESULT_DIRECT_XSLT)
+ 
+     def testXSLTTemplate(self):
+@@ -71,7 +71,7 @@ class XMLTraverse(TestCase):
+         #print(">>>", etree.tostring(et))
+         #print(">>>", etree.tostring(r))
+         modified = et.xslt(r)
+-        ret = etree.tostring(modified, encoding='unicode')
++        ret = str_enc(etree.tostring(modified, encoding='UTF-8'), 'utf-8')
+         #print("<<<", ret)  # --> expected
+         self.assertEqual(ret, RESULT_DIRECT_XSLT)
+ 
+

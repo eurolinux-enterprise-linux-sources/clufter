@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Program-specific commons"""
@@ -7,6 +7,7 @@ __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 import logging
 from collections import Mapping, MutableMapping, MutableSequence, MutableSet
+from functools import reduce
 from optparse import Option
 from os import environ, fdopen, isatty, pathsep
 from os.path import abspath, dirname, samefile, \
@@ -15,6 +16,11 @@ from os.path import abspath, dirname, samefile, \
                     join as path_join
 from re import compile as re_compile
 from subprocess import Popen
+
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 from sys import stderr, stdin, stdout
 
 from . import package_name
@@ -25,7 +31,14 @@ from .utils import areinstances, \
                    isinstanceexcept, \
                    selfaware, \
                    tuplist
+from .utils_2to3 import basestring, foreach_u, iter_items, xrange
 from .utils_func import apply_split
+
+# do not alias it other way around to avoid accidental "file(f, 'w')"
+try:
+    IOBase = file
+except NameError:  # PY3 forward compability
+    from io import IOBase
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +50,10 @@ log = logging.getLogger(__name__)
 mutables = (MutableMapping, MutableSequence, MutableSet)
 
 class TweakedDict(MutableMapping):
-    """Object representing command context"""
+    """Object representing command context
+
+       Note: not suitable for wrapping OrderedDict or the like as that
+             extra property will get disregarded (+ warning emitted)."""
 
     class notaint_context(object):
         def __init__(self, self_outer, exit_off):
@@ -65,13 +81,15 @@ class TweakedDict(MutableMapping):
                     # silently? follow the immutability
                     notaint = True
                     bypass = True
+                elif isinstance(initial, OrderedDict):
+                    log.warn("Possibly dropping 'ordered' property of dict")
                 if bypass or notaint:
                     self._dict = initial
                 if not bypass:
                     # full examination
-                    self._notaint = False  # temporarily need to to allow
-                    map(lambda (k, v): self.__setitem__(k, v),
-                                       initial.iteritems())
+                    self._notaint = False  # temporarily need to allow
+                    foreach_u(lambda k, v: self.__setitem__(k, v),
+                              iter_items(initial))
         self._notaint = notaint
 
     def __delitem__(self, key):
@@ -155,7 +173,7 @@ longopt_letters_reprio = \
         (lambda lo:
             lo[0] + ''.join(sorted(lo[1:],
                                    key=lambda x: int(x.lower() in 'aeiouy')))
-        )(filter(lambda c: c.isalpha(), longopt))
+        )(tuple(c for c in longopt if c.isalpha()))
 
 class ExpertOption(Option):
     pass
@@ -300,8 +318,16 @@ def getenv_namespaced(varname, value=None, namespace=package_name().upper()):
 
 
 def setenv_namespaced(varname, value=None, namespace=package_name().upper()):
-    """Set value of environment variable prefixed with `namespace + '_'`"""
-    environ['_'.join((namespace, varname))] = value
+    """Set value of environment variable prefixed with `namespace + '_'`
+
+    Variable is removed (i.e. undefined) if `value` is `None`."""
+    if value is None:
+        try:
+            del environ['_'.join((namespace, varname))]
+        except KeyError:
+            pass
+    else:
+        environ['_'.join((namespace, varname))] = value
 
 
 # cf. https://github.com/karelzak/util-linux/blob/master/lib/colors.c#L107
@@ -413,7 +439,7 @@ class FancyOutput(object):
     # TODO use /etc/terminal-colors.d/clufter.{enable,disable,scheme}
     def __init__(self, f=stdout, recheck=False, color=None, quiet=False,
                  prefix='', **cfg):
-        if not isinstance(f, file):
+        if not isinstance(f, IOBase):
             f = fdopen(f, "a")
         self._f = f
         self._quiet = quiet
@@ -471,3 +497,12 @@ def docformat(*args, **kwargs):
                 pass
         return fnc
     return deco
+
+
+def namever_partition(s):
+    """For `.*-*[0-9]*(.[0-9]*)*`, return tuple (prefix, v1, ..., vX)
+
+    For instance, 'pacemaker-2.10' -> ('pacemaker', 2, 10)."""
+    name = s.rstrip("0123456789.")
+    return ((name.rstrip('-'), )
+            + tuple(int(i) for i in s[len(name):].split('.') if i))

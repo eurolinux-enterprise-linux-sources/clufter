@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base format stuff (metaclass, classes, etc.)"""
@@ -9,13 +9,20 @@ __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 import hashlib
 from copy import deepcopy
+from functools import reduce
 from glob import glob
 from imp import find_module, load_module
+from itertools import dropwhile, islice
 from logging import getLogger
 from os import extsep, fdopen, stat, walk
 from os.path import basename, commonprefix, dirname, exists, join, sep, splitext
 from sys import modules
 from time import time
+
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 
 from lxml import etree
 
@@ -23,11 +30,13 @@ try:
     from .defaults import HASHALGO
 except ImportError:
     HASHALGO = 'md5'
-from .error import ClufterError
+from .error import ClufterError, ClufterPlainError
 from .plugin_registry import MetaPlugin, PluginRegistry
 from .protocol import Protocol
 from .utils import arg2wrapped, args2sgpl, args2tuple, args2unwrapped, \
                    classproperty, \
+                   filterdict_keep, \
+                   filterdict_pop, \
                    head_tail, \
                    hybridmethod, \
                    immutable, \
@@ -35,8 +44,10 @@ from .utils import arg2wrapped, args2sgpl, args2tuple, args2unwrapped, \
                    isinstanceupto, \
                    popattr, \
                    tuplist
+from .utils_2to3 import MimicMeta, basestring, bytes_enc, iter_items, xrange
+from .utils_func import bifilter_unpack, foreach
 from .utils_lxml import etree_parser_safe
-from .utils_prog import ProtectedDict, getenv_namespaced
+from .utils_prog import ProtectedDict, getenv_namespaced, namever_partition
 from .utils_xml import rng_get_start, rng_pivot
 
 log = getLogger(__name__)
@@ -45,6 +56,9 @@ DEFAULT_ROOT_DIR = join(dirname(__file__), 'formats')
 
 
 class FormatError(ClufterError):
+    pass
+
+class FormatPlainError(ClufterPlainError, FormatError):
     pass
 
 
@@ -60,12 +74,22 @@ class formats(PluginRegistry):
         cls._protocols, cls._validators, cls._protocol_attrs = {}, {}, set()
         cls._context = set(popattr(cls, 'context_specs',
                                    attrs.pop('context_specs', ())))
+        cls._update_to = OrderedDict()  # to be filled "retrospectively"
+        compat = popattr(cls, 'compat_contingency',
+                         attrs.pop('compat_contingency', ()))
+        cls._update_from = OrderedDict((c.in_format, c) for c in compat)
         # protocols merge: top-down through inheritance
-        for base in reversed(bases):
+        # (real base class goes last, rest are "convertible siblings")
+        for i, base in enumerate(reversed(bases)):
+            if i or base is MetaPlugin:  # not a proper base or CompositeFormat
+                continue
             cls._protocols.update(getattr(base, '_protocols', {}))
             cls._validators.update(getattr(base, '_validators', {}))
             cls._context.update(getattr(base, '_context', ()))
             cls._protocol_attrs.update(getattr(base, '_protocol_attrs', ()))
+            if cls.name in base._update_from:
+                base._update_from[cls] = flt = base._update_from.pop(cls.name)
+                cls._update_to[base] = flt
         # updated with locally defined proto's (marked by `producing` wrapper)
         specs = popattr(cls, 'validator_specs',
                         attrs.pop('validator_specs', {}))
@@ -92,7 +116,7 @@ class formats(PluginRegistry):
                 cls._validators[protocol] = validator, newspec
 
 
-class Format(object):
+class _Format(object):
     """Base for configuration formats
 
     Base principles:
@@ -106,6 +130,36 @@ class Format(object):
               context by raising an exception in the method body
         - create format instance = internalize, call = externalize
         - protocols are property of the class, representation of an instance
+        - basic inheritance rules apply to formats as well, notably that
+          an instance of expected class' subclass is generally acceptable,
+          but there are very specific subtleties that should rather be
+          spelled out:
+          - for a format hierarchy that explicitly arranges for older-to-newer
+            instance upgrades (`cib` family of formats is one such example)
+            - inheritance for `fmt` placeholder format should be arranged
+              like this:  Format <-- ... <-- fmt <-- fmtN <-- ... <-- fmtM
+              (also, care to stick with a linear inheritance between formats)
+              (where "<--" denotes inheritance as usual, and fmtM/fmtN
+              stands for oldest/newest supported version, respectively, hence
+              we can conclude that older format versions derive from newer
+              ones, transitively)
+            - `fmt` top of the formats hierarchy should be the generalization
+              of the format, that is, able to accept arbitrary instance of
+              its subclasses-or-self (as long as the format has a way to
+              distinguish the format version internally so it won't get lost)
+            - for the rest (tail) of the hierarchy, we can easily see that
+              instances of newer format versions cannot be used where older
+              ones are explicitly required (forward-consciousness is not
+              assumed at all), but the opposite direction, that is,
+              backward-consciousness, is deliberately possible, implicitly
+              through trial-and-error (a.k.a. lazy) arrangement (see below)
+            - implicit forward compatibility takes the least-resistance
+              approach -- no hassles are needed when an instance of an older
+              format version validates per requirements imposed on the newer
+              format, otherwise this new format is supposed to specify
+              filter(s), via its `compat_contingency` member, sufficient
+              to promote the older instance so it eventually validates
+              (it's a fatal failure if this cannot be achieved)
 
 
     Little bit of explanation:
@@ -132,50 +186,65 @@ class Format(object):
         that takes protocol name as a parameter.
 
     """
-    __metaclass__ = formats
+    context_specs = 'validator_specs', 'compat_contingency'
 
-    context_specs = 'validator_specs',
-
-    @classproperty
+    @MimicMeta.passdeco(classproperty)
     def context(self):
         return tuple(self._context)
 
-    @classproperty
+    @MimicMeta.passdeco(classproperty)
     def native_protocol(self):
         """Native protocol"""
         raise AttributeError
 
     ###
 
-    def swallow(self, protocol, *args):
-        """"Called by implicit constructor to get a format instance"""
+    @MimicMeta.method
+    def _swallow(self, protocol, *args):
+        """Called by native constructor/producer to store a format instance"""
         if protocol == 'native':
             protocol = self.native_protocol
 
         assert protocol in self._protocols, ("unrecognized protocol `{0}'"
                                              .format(protocol))
         assert args != (None, )
-        validator = self.validator(protocol)
-        if validator:
-            entries, _ = head_tail(validator(*args))
-            if isinstance(entries, basestring):
-                log.warning(entries)
-            elif entries:
-                raise FormatError(self, "Validation: {0}".format(
-                    ', '.join(':'.join(args2tuple(str(e[0]), str(e[1]), *e[2:]))
-                              for e in entries))
-                )
+        constructing = not self._representations  # called from constructor
         prev = self._representations.setdefault(protocol, args)
         assert prev is args
 
+        if not constructing:
+            return  # trust that equivalent of once validated keeps the property
+        log.debug("Will try to validate `{0}' instance"
+                  .format(self.__class__.name))
+
+        cands = (protocol, self.native_protocol) + tuple(self._validators)[:1]
+        validating_protocol = args2unwrapped(*islice(dropwhile(lambda x: x not in
+                                                               self._validators,
+                                                               cands), 1))
+        validator = self.validator(validating_protocol)
+        if not validator:
+            return  # cannot validate in any way
+
+        obj = self(validating_protocol)
+        entries, _ = head_tail(validator(obj))
+        if isinstance(entries, basestring):
+            log.warning(entries)
+        elif entries:
+            raise FormatError(self, "Validation: {0}".format(
+                ', '.join(':'.join(args2tuple(str(e[0]), str(e[1]), *e[2:]))
+                          for e in entries))
+            )
+
+    @MimicMeta.method
     def producer(self, protocol):
         protocol_cls, protocol_attr = self._protocols[protocol]
         if protocol_cls is self.__class__:
             return getattr(self, protocol_attr)  # has to be self
         return getattr(super(self.__class__, self), protocol_attr)
 
+    @MimicMeta.method
     def produce(self, protocol, *args, **kwargs):
-        """"Called by implicit invocation to get data externalized"""
+        """Called by implicit invocation to get data externalized"""
         if protocol == 'native':
             protocol = self.native_protocol
 
@@ -187,8 +256,53 @@ class Format(object):
                                     .format(self.__class__.name, protocol))
         return ret
 
-    def __init__(self, protocol, *args, **kwargs):
+    @MimicMeta.method
+    def __new__(cls, protocol, *args, **kwargs):
+        """Format pre-constructor (possibly format-upgrading to parent class)"""
+        good, bad = bifilter_unpack(lambda c, f: not isinstance(c, basestring),
+                                    iter_items(cls._update_from))
+        if bad:
+            log.warning("Unresolved update-from filters for `{0}': {1}".format(
+                        cls.name, ','.join(c for (c, _) in bad)))
+        retself, worklist = None, list(reversed(good)) + [(cls, None)]
+        while worklist:
+            tryfmt, tryflt = worklist.pop()
+            log.debug("Trying pre-construction of `{0}' format going from"
+                      " `{1}'{2}"
+                      .format(cls.name, tryfmt.name,
+                              tryflt.name.join((" (using `", "' filter)"))
+                              if tryflt else ""))
+            try:
+                # for tryflt case, we cannot use `tryflt.in_format` as it is
+                # just a string here
+                obj = object.__new__(tryfmt)
+                obj._construct(protocol, *args, **kwargs)
+                if not tryflt:
+                    retself = obj
+                else:
+                    # note that tryflt is filter class that needs to be
+                    # instantiated by being passed dictionary to resolved
+                    # its formats at
+                    flt = tryflt(formats={
+                        tryflt.in_format: tryfmt,
+                        cls.name: cls,
+                    })
+                    retself = flt(obj)
+            except FormatError as e:
+                retself = e
+                continue
+            else:
+                break
+        assert retself
+        if isinstance(retself, FormatError):
+            raise retself
+        return retself
+
+    @MimicMeta.method
+    def _construct(self, protocol, *args, **kwargs):
         """Format constructor, i.e., object = concrete internal data"""
+        # cannot be doubly-undescored otherwise the "foreign lookup" will miss
+        assert not(getattr(self, '_representations', None)), "int. API misuse"
         rs = {}
         self._representations, self._representations_ro = rs, ProtectedDict(rs)
         if not hasattr(self, '_hash'):  # can be defined at the class level
@@ -196,7 +310,7 @@ class Format(object):
         validator_specs = kwargs.pop('validator_specs', {})
         default = validator_specs.setdefault('', None)  # None ~ don't track
         validators = {}
-        for p in self._validators.iterkeys():
+        for p in self._validators:
             spec = validator_specs.get(p, default)
             if spec is None:
                 continue
@@ -222,38 +336,64 @@ class Format(object):
                 return wrapped_call()
             log.debug("Proxying {0} to add callability".format(attr))
             setattr(self, attr, get_protocol_proxy(getattr(self, attr)))
-        self.swallow(protocol, *args)
+        self._swallow(protocol, *args)
 
-    @classmethod
+    @MimicMeta.passdeco(classmethod)
+    def common_protocols(cls, foreign):
+        """Get common local vs. foreign protocols, native ones prioritized"""
+        # XXX composite format
+        if not hasattr(foreign, '_protocols'):
+            raise FormatError(cls, "cannot check common protocols for `{0}'",
+                              repr(foreign))
+        return sorted(
+            reduce(
+                set.intersection,
+                map(set, (cls._protocols, foreign._protocols))
+            ),
+            key=lambda x:
+                int(x == cls.native_protocol) * 2
+                + int(x == foreign.native_protocol)
+        )
+
+    @MimicMeta.classmethod
     def as_instance(cls, *decl_or_instance, **kwargs):
         """Create an instance or verify and return existing one"""
         if decl_or_instance and isinstance(decl_or_instance[0], Format):
             instance = decl_or_instance[0]
-            # XXX
             if not isinstanceupto(instance, cls, Format):
                 raise FormatError(cls, "input object: format mismatch"
                                   " (expected `{0}' or a superclass, got"
                                   " `{1}')", cls.name, instance.__class__.name)
-        else:
-            instance = cls(*decl_or_instance, **kwargs)
+            if instance.__class__.__bases__[0] is cls:
+                return instance
+
+            # convert using (preferably native) protocol
+            com = instance.common_protocols(cls)
+            if not com:
+                raise FormatError(cls, "no common protocol with source format"
+                                       " `{0}'", instance.name)
+            decl_or_instance = (com[0], instance(com[0]))
+
+        instance = cls(*decl_or_instance, **kwargs)
         return instance
 
+    @MimicMeta.method
     def __call__(self, protocol='native', *args, **kwargs):
         """Way to externalize object's internal data"""
         return self.produce(protocol, *args, **kwargs)
 
-    @classproperty
+    @MimicMeta.passdeco(classproperty)
     def protocols(self):
         """Set of supported protocols for int-/externalization"""
         return self._protocols.keys()  # installed by meta-level
 
-    @hybridmethod
+    @MimicMeta.passdeco(hybridmethod)
     def validator(this, protocol=None, spec=None):
         """Return validating function or None
 
         This ought to be the authoritative (and only) way to use
         a validator, do not touch _validators and also validator_specs
-        is not dropped from class attributes for this very reason.
+        is dropped from class attributes for this very reason.
         """
         which = this.native_protocol if protocol is None else protocol
         try:
@@ -266,26 +406,26 @@ class Format(object):
         return lambda *args, **kwargs: validator(this, *args,
                                                  **dict(kwargs, spec=spec))
 
-    @property
+    @MimicMeta.passdeco(property)
     def hash(self):
         if self._hash is None:
             raise NotImplementedError
         return self._hash
 
-    @property
+    @MimicMeta.passdeco(property)
     def representations(self):
         """Mapping of `protocol: initializing_data`"""
         # XXX should be ProtectedDict
         return self._representations_ro
 
-    @staticmethod
+    @MimicMeta.staticmethod
     def producing(protocol, chained=False, protect=False, validator=None):
         """Decorator for externalizing method understood by the `Format` magic
 
         As a bonus: caching of representations."""
         def deco_meth(meth):
             def deco_args(self, protocol, *args, **kwargs):
-                # XXX enforce nochain for this interative processing?
+                # XXX enforce nochain for this iterative processing?
                 do_protect = protect and not kwargs.pop('protect_safe', False)
                 produced = None
                 try:
@@ -320,7 +460,7 @@ class Format(object):
                         if (that_cls is self.__class__
                             and protocol not in self._representations):
                             # computed -> stored normalization
-                            self.swallow(protocol, *arg2wrapped(produced))
+                            self._swallow(protocol, *arg2wrapped(produced))
                         else:
                             do_protect = False
                         break
@@ -340,6 +480,9 @@ class Format(object):
         return deco_meth
 
 
+Format = MimicMeta('Format', formats, _Format)
+
+
 class Nothing(Format):
     """Empty format, typically an input for "generator" type of filters"""
     native_protocol = VOID = Protocol('void')
@@ -347,7 +490,7 @@ class Nothing(Format):
     _hash = hash(None)
 
     @Format.producing(VOID)
-    def get_void(self, *protodecl):
+    def get_void(self, *iodecl):
         pass  # same as return None
 
 
@@ -357,36 +500,39 @@ class SimpleFormat(Format):
     FILE = Protocol('file')
     void_file = '/dev/null'  # XXX not multi-platform
 
-    def __init__(self, protocol, *args, **kwargs):
+    def _construct(self, protocol, *args, **kwargs):
         """Format constructor, i.e., object = concrete uniformat data"""
         assert isinstance(protocol, basestring), \
                "protocol has to be string for `{0}', not `{1}'" \
                .format(self.__class__.name, protocol)
-        super(SimpleFormat, self).__init__(protocol, *args, **kwargs)
+        super(SimpleFormat, self)._construct(protocol, *args, **kwargs)
 
     @Format.producing(BYTESTRING)
-    def get_bytestring(self, *protodecl):
+    def get_bytestring(self, *iodecl):
         if self.FILE in self._representations:  # break the possible loop
             infile = self.FILE()
             if hasattr(infile, 'read'):
                 # assume fileobj out of our control, do not close
-                return infile.read()
+                return bytes_enc(infile.read(), 'utf-8')
 
             assert isinstance(infile, basestring)
-            with file(infile, 'rb') as f:
+            with open(infile, 'rb') as f:
                 return f.read()
 
     @Format.producing(FILE)
-    def get_file(self, *protodecl):
-        outfile = protodecl[-1]
+    def get_file(self, *iodecl):
+        outfile = iodecl[-1]
         if hasattr(outfile, 'write'):
             # assume fileobj out of our control, do not close
-            outfile.write(self.BYTESTRING())
+            if hasattr(outfile, 'buffer'):  # PY3: std{in,out,err} text mode
+                outfile.buffer.write(self.BYTESTRING())
+            else:
+                outfile.write(self.BYTESTRING())
             return outfile.name
 
         assert isinstance(outfile, basestring)
-        with file(outfile, 'wb') as f:
-            f.write(self.BYTESTRING())
+        with open(outfile, 'wb') as f:
+            f.write(bytes_enc(self.BYTESTRING(), 'utf-8'))
         return outfile
 
     @property
@@ -407,7 +553,7 @@ class SimpleFormat(Format):
             # manual verification (provided HASHALGO=md5, default):
             # w/o salt:   md5sum $FILE
             # with salt:  { stat --printf "%Y" $FILE; cat $FILE; } | md5sum
-            salt = ''
+            content, salt = '', ''
             hash_algo = getenv_namespaced('HASHALGO', HASHALGO)
             do_salt = getenv_namespaced('NOSALT', '0') in ('0', 'false')
             try:
@@ -430,15 +576,16 @@ class SimpleFormat(Format):
 
             if not salt and do_salt:
                 salt = str(int(time()))
-            h.update(salt)
+            h.update(bytes_enc(salt))
 
             if self.BYTESTRING in self._representations:
-                h.update(self.BYTESTRING())
+                content = self.BYTESTRING()
             else:
-                h.update(str(hash(self)))
+                content = str(hash(self))
+            h.update(bytes_enc(content))
 
             # only use first quarter of the whole hexdigest
-            self._hash = h.hexdigest()[:h.digest_size/2]
+            self._hash = h.hexdigest()[:h.digest_size//2]  # expected even
         return self._hash
 
     @classmethod
@@ -458,9 +605,12 @@ class SimpleFormat(Format):
                                      *io_decl[2:])
             except (ValueError, KeyError):
                 pass
+            except ((AttributeError, ) if not in_mode else ()):
+                pass  # input terminals have to be interpolation-complete by now
             fdef = io_decl[1]
             fdef = "@{0}".format(int(not(in_mode))) if fdef == '-' else fdef
-            if fdef.rstrip('0123456789') == '@':
+            if (isinstance(fdef, basestring)
+                    and fdef.rstrip('0123456789') == '@'):
                 fd = int(fdef[1:])
                 if fd not in magic_fds:
                     # XXX be careful about not duplicating? (especially '-')
@@ -499,7 +649,9 @@ class CompositeFormat(Format, MetaPlugin):
     native_protocol = 'composite'  # to be overridden by per-instance one
                                    # XXX: hybridproperty?
 
-    def __init__(self, protocol, *args, **kwargs):
+    # XXX def __new__
+
+    def _construct(self, protocol, *args, **kwargs):
         """Format constructor, i.e., object = concrete multiformat data
 
         Parameters:
@@ -533,7 +685,7 @@ class CompositeFormat(Format, MetaPlugin):
             f(p, *args2tuple(a), **kwargs)
             for (f, p, a) in zip(formats, protocol[1], args)
         )
-        super(CompositeFormat, self).__init__(protocol, *args, **kwargs)
+        super(CompositeFormat, self)._construct(protocol, *args, **kwargs)
 
     def __iter__(self):
         return iter(self._designee)
@@ -542,7 +694,7 @@ class CompositeFormat(Format, MetaPlugin):
         return self._designee[index]
 
     def produce(self, protocol, *args, **kwargs):
-        """"Called by implicit invocation to get data externalized"""
+        """Called by implicit invocation to get data externalized"""
         if protocol == 'native':
             protocol = self.native_protocol
 
@@ -564,7 +716,7 @@ class CompositeFormat(Format, MetaPlugin):
 
 
 class XML(SimpleFormat):
-    """"Base for XML-based configuration formats"""
+    """Base for XML-based configuration formats"""
 
     MAX_DEPTH = 1000
 
@@ -629,6 +781,10 @@ class XML(SimpleFormat):
         result = {}
         tree_stack = [(root_dir, None, result)]  # for bottom-up reconstruction
         for root, dirs, files in walk(root_dir):
+            try:
+                dirs.remove('__pycache__')  # PY3
+            except ValueError:
+                pass
             # multi-step upwards and (followed by)/or single step downwards
             while commonprefix((root, tree_stack[-1][0])) != tree_stack[-1][0]:
                 cls._walk_schema_step_up(tree_stack)
@@ -637,7 +793,7 @@ class XML(SimpleFormat):
             else:
                 assert root == root_dir
                 # at root, we do not traverse to any other dir than `xml_root`
-                map(lambda d: d != xml_root and dirs.remove(d), dirs[:])
+                foreach(lambda d: d != xml_root and dirs.remove(d), dirs[:])
                 current_tracking = tree_stack[-1][2]
                 files = []
 
@@ -662,8 +818,8 @@ class XML(SimpleFormat):
                 else:
                     try:
                         mod = load_module(mname, mfile, mpath, mdesc)
-                    except ImportError:
-                        log.warning("Cannot load `{0}'".format(mpath))
+                    except ImportError as e:
+                        log.warning("Cannot load `{0}': {1}".format(mpath, e))
                         continue
                     finally:
                         if mfile:
@@ -698,8 +854,45 @@ class XML(SimpleFormat):
     }
 
     @classmethod
-    def etree_rng_validator(cls, et, root_dir=None,
-                            spec=validator_specs[ETREE], start=None):
+    def _etree_rng_validator_specs(cls, root_dir=None, spec=None):
+        if modules[cls.__module__].__file__ == __file__:
+            spec = ()    # skip validating for plain XML
+        else:
+            if spec is None:
+                _, spec = cls._validators[cls.ETREE]  # installed by meta-level
+            # XXX use spec getter a was the intention before
+            if not root_dir:
+                root_dir = dirname(modules[cls.__module__].__file__)
+            if sep not in spec:
+                spec = join(root_dir, cls.root, spec)
+            if any(filter(lambda c: c in spec, '?*')):
+                globbed = glob(spec)
+                spec = globbed or spec
+            elif exists(spec):
+                spec = args2tuple(spec)
+            if not tuplist(spec):
+                raise FormatPlainError("Cannot validate, no matching spec:"
+                                       " `{0}'".format(spec))
+        return spec
+
+    @classmethod
+    def etree_rng_validator_proper_specs(cls, **kwargs):
+        """Return class-exclusive validating RNG files, name/version ordered"""
+        specs = set(cls._etree_rng_validator_specs(
+            **filterdict_keep(kwargs, 'root_dir', 'spec')
+        ))
+        ancestor_specs = set()
+        for ancestor in cls._update_from:
+            this_ancestor_specs = ancestor._etree_rng_validator_specs(
+                **filterdict_keep(kwargs, 'root_dir', 'spec')
+            )
+            if this_ancestor_specs:
+                ancestor_specs.update(this_ancestor_specs)
+        specs.difference(ancestor_specs)
+        return sorted(specs, key=lambda x: namever_partition(splitext(x)[0]))
+
+    @classmethod
+    def etree_rng_validator(cls, et, start=None, **kwargs):
         """RNG-validate `et` ElementTree with schemes as per `root_dir`+`spec`
 
         ... and, optionally, narrowed to `start`-defined grammar segment.
@@ -718,19 +911,12 @@ class XML(SimpleFormat):
             snippet from "master" validating schema relevant to `start`
         """
         # XXX holds its private cache under cls._validation_cache
-        assert spec
-        if not root_dir:
-            root_dir = dirname(modules[cls.__module__].__file__)
-        if sep not in spec:
-            spec = join(root_dir, cls.root, spec)
-        if any(filter(lambda c: c in spec, '?*')):
-            globbed = glob(spec)
-            spec = globbed or spec
-        elif exists(spec):
-            spec = args2tuple(spec)
-        if not tuplist(spec):
-            return ("Cannot validate, no matching spec: `{0}'"
-                    .format(spec), )
+        try:
+            spec = cls._etree_rng_validator_specs(
+                **filterdict_pop(kwargs, 'root_dir', 'spec')
+            )
+        except FormatPlainError as e:
+            return (((0, 0, str(e)), ), None, None)
         fatal, master, master_snippet = [], '', ''
         for s in reversed(sorted(spec)):
             fatal, master = [], s
@@ -771,14 +957,13 @@ class XML(SimpleFormat):
     etree_validator = etree_rng_validator
 
     @SimpleFormat.producing(BYTESTRING, chained=True)
-    def get_bytestring(self, *protodecl):
+    def get_bytestring(self, *iodecl):
         # chained fallback
         return etree.tostring(self.ETREE(protect_safe=True),
-                              pretty_print=True)
+                              encoding='UTF-8', pretty_print=True)
 
     @SimpleFormat.producing(ETREE, protect=True,
-                            # pre 2.7 compat:  http://bugs.python.org/issue5982
-                            validator=etree_validator.__get__(1).im_func)
-    def get_etree(self, *protodecl):
+                            validator=etree_validator.__get__(1).__func__)
+    def get_etree(self, *iodecl):
         return etree.fromstring(self.BYTESTRING(),
                                 parser=etree_parser_safe).getroottree()

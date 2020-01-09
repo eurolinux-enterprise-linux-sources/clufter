@@ -1,7 +1,10 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+
+from __future__ import print_function
+
 """Setup script/data"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
@@ -34,6 +37,17 @@ from setuptools.command.develop import develop as setuptools_develop
 # with default pip install
 from setuptools.command.install import install as setuptools_install
 
+# Python 3 compatibility
+from sys import version_info
+if version_info[0] >= 3:
+    str_enc = lambda s, encoding='ascii': str(s, encoding)
+else:
+    str_enc = lambda s, *args: str(s)
+try:
+    basestring = basestring
+except NameError:
+    basestring = str
+
 # bail out if any code is not valid (http://stackoverflow.com/a/2240549)
 import py_compile
 orig_py_compile = py_compile.compile
@@ -57,10 +71,11 @@ chdir(here)  # make setup.py possess expected CWD + play better with pip install
 
 true_gen = lambda this: True
 # XXX copy-paste of utils_func.py
-bifilter = \
-    lambda fnc, seq: \
-        reduce(lambda acc, x: acc[int(not fnc(x))].append(x) or acc,
-               seq, ([], []))
+# from functools import reduce
+#bifilter = \
+#    lambda fnc, seq: \
+#        reduce(lambda acc, x: acc[int(not fnc(x))].append(x) or acc,
+#               seq, ([], []))
 
 # this is needed to workaround naive approach in recent setuptools
 # (https://bitbucket.org/pypa/setuptools/issue/195/no-longer-follows-symbolic)
@@ -111,14 +126,14 @@ def pkgconfig(*packages, **kw):
     except ImportError:
         from commands import getoutput
     flag_map = {'-I': 'include_dirs', '-L': 'library_dirs', '-l': 'libraries'}
-    for token in getoutput("pkg-config --libs --cflags {0}"
-                           .format(' '.join(packages))).split():
+    for token in str_enc(getoutput("pkg-config --libs --cflags {0}"
+                                   .format(' '.join(packages)))).split():
         if token[:2] in flag_map:
             kw.setdefault(flag_map.get(token[:2]), []).append(token[2:])
         else:  # throw others to extra_link_args
             kw.setdefault('extra_link_args', []).append(token)
-    for k, v in kw.iteritems():  # remove duplicates
-        kw[k] = list(set(v))
+    for k in kw:  # remove duplicates
+        kw[k] = list(set(kw[k]))
     return kw
 
 # inspired from speaklater: http://pypi.python.org/pypi/speaklater
@@ -174,7 +189,7 @@ class build_binary(build_ext):
         compiler.link_shared_object = \
             lambda *args, **kwargs: \
                 compiler.link_executable(
-                    *args, **dict(((k, v) for k, v in kwargs.iteritems()
+                    *args, **dict(((k, kwargs[k]) for k in kwargs
                                   if k not in ('build_temp', 'export_symbols',
                                                'libraries')),
                                   libraries=[l for l in
@@ -189,7 +204,7 @@ class build_binary(build_ext):
             raise DistutilsSetupError("Only Binary instances allowed")
 
     def get_ext_filename(self, ext_name):
-        return path_splitext(build_ext.get_ext_filename(self, ext_name))[0]
+        return path_join(*ext_name.split('.'))
 
 
 class develop(setuptools_develop):
@@ -242,8 +257,8 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
         @classmethod
         def inject_cmdclass(cls, *new_classes, **orig_classes):
             cmdclass = {}
-            for name, injectclass in orig_classes.iteritems():
-                cmdclass[name], new = cls._inject(name, injectclass)
+            for name in orig_classes:
+                cmdclass[name], new = cls._inject(name, orig_classes[name])
                 new_classes += new
             for c in (cls, ) + new_classes:
                 cmdclass[c.__name__] = c
@@ -291,7 +306,7 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
         def initialize_options(self):
             # Parameters we want to obtain via setup.cfg, command-line
             # arguments etc. must be prepared as attributes of this object
-            if DEBUG: print (DBGPFX + "\tinitialize_options")
+            if DEBUG: print(DBGPFX + "\tinitialize_options")
             for key in (self.pkg_options + self.needs_any_opt
                         + self.needs_always_opts):
                 setattr(self, key, None)
@@ -300,7 +315,7 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
 
         def finalize_options(self):
             # Obtained parameters are all moved to ``self.pkg_params'' dict
-            if DEBUG: print (DBGPFX + "\tfinalize_options")
+            if DEBUG: print(DBGPFX + "\tfinalize_options")
             for key in self.pkg_options:
                 value = getattr(self, key)
                 if value is None:
@@ -310,7 +325,8 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
                 else:
                     self.pkg_params[key] = value
             # Evaluate all functions within pkg_params (semi-lazy evaluation)
-            for key, value in self.pkg_params.iteritems():
+            for key in self.pkg_params:
+                value = self.pkg_params[key]
                 if hasattr(value, "__call__") or isinstance(value, Callable):
                     self.pkg_params[key] = value(self.pkg_params)
             dist = self.distribution
@@ -323,11 +339,11 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
             return ()  # called from install command for each subcommand
 
         def run(self):
-            if DEBUG: print (DBGPFX + "\trun")
+            if DEBUG: print(DBGPFX + "\trun")
             if getattr(self, self.DEV_SWITCH, 0) \
             or getattr(self, self.BUILD_DEV_SWITCH, 0):
                 # Mimic ``develop'' command over "prepared" files
-                if DEBUG: print (DBGPFX + "\trun: mimic develop")
+                if DEBUG: print(DBGPFX + "\trun: mimic develop")
                 self._pkg_prepare_build()
                 self.run_command('build_binary')
                 self.run_command('build_ext')
@@ -339,25 +355,26 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
                 return
             if self.distribution.get_command_obj('build', create=False):
                 # As a part of ``build'' command
-                if DEBUG: print (DBGPFX + "\trun: build")
+                if DEBUG: print(DBGPFX + "\trun: build")
                 self._pkg_prepare_build()
             if self.distribution.get_command_obj('install', create=False):
                 # As a part of ``install'' command
-                if DEBUG: print (DBGPFX + "\trun: install")
+                if DEBUG: print(DBGPFX + "\trun: install")
                 self._pkg_prepare_install()
             else:
                 from distutils import log
                 log.debug("``pkg_name'' command used with no effect")
 
         def _pkg_prepare_build(self):
-            for pkg_name, filedefs in (self.package_data or {}).iteritems():
+            package_data = self.package_data or {}
+            for pkg_name in package_data:
                 dst_top = self.distribution.package_dir.get('', '')
                 dst_pkg = path_join(
                               dst_top,
                               self.distribution.package_dir.get(pkg_name, pkg_name)
                 )
-                if DEBUG: print (DBGPFX + "\tbuild dst_pkg %s" % dst_pkg)
-                for filedef in filedefs:
+                if DEBUG: print(DBGPFX + "\tbuild dst_pkg %s" % dst_pkg)
+                for filedef in package_data[pkg_name]:
                     self._pkg_prepare_file(
                         self.pkg_params[filedef['src']],
                         path_join(dst_pkg, self.pkg_params[filedef['dst']]),
@@ -426,8 +443,8 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
                     glob(src)
                 ))
                 if DEBUG:
-                    print (DBGPFX + "\tinstall data_files: %s"
-                           % self.distribution.data_files)
+                    print(DBGPFX + "\tinstall data_files: %s"
+                          % self.distribution.data_files)
 
         def _pkg_prepare_file(self, src, dst, substitution=False):
             if path_isabs(dst):
@@ -439,7 +456,7 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
                        " location %s" % (src, dst))
             if substitution:
                 if DEBUG:
-                    print (DBGPFX + "\tSubstituting strings while copying %s -> %s"
+                    print(DBGPFX + "\tSubstituting strings while copying %s -> %s"
                            % (src, dst))
                 if self.dry_run:
                     return
@@ -450,28 +467,28 @@ def setup_pkg_prepare(pkg_name, pkg_prepare_options=()):
                             for key in filter(
                                 lambda k: not k.startswith("_")
                                           and k not in self.boolean_options,
-                                self.pkg_params.iterkeys()
+                                self.pkg_params
                             ):
                                 if DEBUG:
-                                    print (DBGPFX + "\tReplace %s -> %s"
-                                           % ('@' + key.upper() + '@', self.pkg_params[key]))
+                                    print(DBGPFX + "\tReplace %s -> %s"
+                                          % ('@' + key.upper() + '@', self.pkg_params[key]))
                                 content = content.replace(
                                               '@' + key.upper() + '@',
                                               self.pkg_params[key]
                                 )
                             fw.write(content)
                     copystat(src, dst)
-                except IOError, e:
+                except IOError as e:
                     raise DistutilsSetupError(str(e))
             else:
                 if DEBUG:
-                    print (DBGPFX + "\tSimply copying %s -> %s" % (src, dst))
+                    print(DBGPFX + "\tSimply copying %s -> %s" % (src, dst))
                 if self.dry_run:
                     return
                 try:
                     copy(src, dst)
                     copystat(src, dst)
-                except IOError, e:
+                except IOError as e:
                     raise DistutilsSetupError(str(e))
     # class pkg_prepare
 
@@ -502,7 +519,7 @@ while True:
             self_discovery_plan.extend(p[:-len('.egg-info')].split('-', 1)[0]
                                        for p in iglob('*.egg-info'))
         if not self_discovery_plan:
-            print "Cannot find myself, please help me with __project__ symlink"
+            print("Cannot find myself, please help me with __project__ symlink")
             raise
 sys_path[:] = backup_path
 
@@ -517,14 +534,15 @@ pkg_name = pkg.package_name()
 # into ``pkg_params'' passed as an option to this command in ``setup()''
 # so they can be used for string substitutions as well
 pkg_prepare = setup_pkg_prepare(pkg_name, (
-    ('ccs_flatten',     "location of bundled helper ccs_flatten"),
-    ('editor',          "which editor to use if EDITOR env variable not set"),
-    ('shell_posix',     "POSIX compliant shell for shebangs"),
-    ('shell_bashlike',  "bash-like shell (process subst.) for  shebangs"),
-    ('hashalgo',        "which hash algorithm to use to generate output name"),
-    ('ra_metadata_dir', "location of RGManager agents/metadata"),
-    ('ra_metadata_ext', "extension used for RGManager agents' metadata"),
-    ('report_bugs',     "where to report bugs"),
+    ('ccs_flatten',      "location of bundled helper ccs_flatten"),
+    ('editor',           "which editor to use if EDITOR env variable not set"),
+    ('extplugins_shared',"where plugins are shared between deployments"),
+    ('shell_posix',      "POSIX compliant shell for shebangs"),
+    ('shell_bashlike',   "bash-like shell (process subst.) for  shebangs"),
+    ('hashalgo',         "which hash algorithm to use to generate output name"),
+    ('ra_metadata_dir',  "location of RGManager agents/metadata"),
+    ('ra_metadata_ext',  "extension used for RGManager agents' metadata"),
+    ('report_bugs',      "where to report bugs"),
 ))
 
 # Contains important values that are then referred to from ``package_data'',
@@ -555,7 +573,8 @@ pkg_params = {
 def cond_require(package, *packages, **preferred):
     packages = (lambda *args: args)(package, *packages)
     for package in packages:
-        for preferred_package, sym in preferred.iteritems():
+        for preferred_package in preferred:
+            sym = preferred[preferred_package]
             try:
                 preferred_module = __import__(preferred_package)
                 for symbol in ((sym, ) if isinstance(sym, basestring) else sym):
@@ -686,7 +705,9 @@ setup(
     extras_require={
         'test': cond_require('unittest2', unittest='runner'),
         'test-nose': cond_require('nose', unittest='runner'),
-        'coverage': ('coverage', ),
+        # see https://bitbucket.org/ned/coveragepy/issues/407#comment-21934227
+        'coverage': ('coverage', ) if version_info[:2] != (3, 2)
+                                   else ('coverage < 4', ),
     },
 
     # TODO: uncomment this when ready for tests

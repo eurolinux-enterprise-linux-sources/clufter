@@ -1,7 +1,10 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+
+from __future__ import print_function
+
 """Command manager"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
@@ -16,7 +19,8 @@ from .error import ClufterError, ClufterPlainError, \
 from .filter_manager import FilterManager
 from .plugin_registry import PluginManager
 from .utils import filterdict_keep
-from .utils_func import apply_intercalate, bifilter
+from .utils_2to3 import basestring, iter_items, iter_values
+from .utils_func import apply_intercalate, bifilter_unpack
 from .utils_prog import make_options, set_logging
 
 log = getLogger(__name__)
@@ -41,9 +45,9 @@ class CommandManager(PluginManager):
         log.debug("Commands before resolving: {0}".format(commands))
         if flt_mgr is None:
             flts = set()
-            for cmd in commands.itervalues():
-                map(lambda flt: flts.add(flt),
-                    apply_intercalate(getattr(cmd, 'filter_chain', ())))
+            for cmd in iter_values(commands):
+                for flt in apply_intercalate(getattr(cmd, 'filter_chain', ())):
+                    flts.add(flt)
             flt_mgr = FilterManager.init_lookup(flts, **kwargs)
         return cls._resolve(flt_mgr.filters, commands, *args,
                             **filterdict_keep(kwargs, 'system', 'system_extra'))
@@ -52,7 +56,7 @@ class CommandManager(PluginManager):
     def _resolve(filters, commands, system='', system_extra=''):
         # name -> (cmd obj if not alias or resolvable name)
         aliases = []
-        inverse_commands = dict((b, a) for a, b in commands.iteritems())
+        inverse_commands = dict((b, a) for a, b in iter_items(commands))
 
         # first, resolve end-use commands
         for cmd_name, cmd_cls in commands.items():
@@ -120,7 +124,7 @@ class CommandManager(PluginManager):
                     sorted(set([cmd, canonical_cmd]),
                            key=lambda i: int(i == canonical_cmd))
                 ))
-                print parser.format_customized_help(usage=usage)
+                print(parser.format_customized_help(usage=usage))
                 return ec
 
             set_logging(opts)
@@ -129,11 +133,11 @@ class CommandManager(PluginManager):
             ec = command(opts, args)
         except ClufterError as e:
             ec = EC.EXIT_FAILURE
-            print e
+            print(e)
             if isinstance(e, CommandNotFoundError):
-                print "\n" + self.pretty_cmds()
+                print("\n" + self.pretty_cmds())
         #except Exception as e:
-        #    print "OOPS: underlying unexpected exception:\n{0}".format(e)
+        #    print("OOPS: underlying unexpected exception:\n{0}".format(e))
         #    ec = EC.EXIT_FAILURE
         return ec
 
@@ -154,10 +158,10 @@ class CommandManager(PluginManager):
                                     modules[obj.__class__.__module__].__file__
                                 ) == pth)))
             )
-            for i, cat in enumerate(
-                bifilter(lambda (name, obj): not isinstance(obj, basestring),
-                         self._plugins.iteritems())
-            )
+            for i, cat in enumerate(bifilter_unpack(
+                lambda name, obj: not isinstance(obj, basestring),
+                iter_items(self._plugins)
+            ))
         ]
         width = max(i[1] for i in cmds_aliases) + linesep_width
         desc_indent = ind + (width * ' ')

@@ -1,5 +1,7 @@
+# virtual provides:
+#   clufter         -> clufter-cli
 Name:           clufter
-Version:        0.59.8
+Version:        0.77.1
 Release:        1%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
@@ -16,11 +18,14 @@ BuildRequires:  bash which
 # following for UpdateTimestamps sanitization function
 #BuildRequires:  diffstat
 
+BuildRequires:  pkgconfig(libxml-2.0)
+
 #global test_version
 %global testver      %{?test_version}%{?!test_version:%{version}}
 
 Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{version}.tar.gz
 Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
+Patch0:         https://pagure.io/clufter/c/ed6c3c850938622a185effd332ce6b553734cad4.patch
 
 %description
 While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
@@ -30,6 +35,7 @@ framework (capable of XSLT) offers also other uses through its plugin library.
 %package cli
 Group:          System Environment/Base
 Summary:        Tool for transforming/analyzing cluster configuration formats
+Provides:       %{name} = %{version}-%{release}
 
 # cannot get bash-completion from EPEL6 into the buildroot
 #BuildRequires:  bash-completion
@@ -39,7 +45,7 @@ BuildRequires:  help2man
 # following for pkg_resources module
 Requires:       python-setuptools
 Requires:       python-%{name} = %{version}-%{release}
-Provides:       %{name} = %{version}-%{release}
+Requires:       %{_bindir}/nano
 BuildArch:      noarch
 
 %description cli
@@ -55,10 +61,9 @@ Group:          System Environment/Libraries
 Summary:        Library for transforming/analyzing cluster configuration formats
 License:        GPLv2+ and GFDL
 
-BuildRequires:  pkgconfig(libxml-2.0)
-
+Requires:       %{name}-bin = %{version}-%{release}
 Requires:       python-lxml
-Requires:       %{_bindir}/nano
+BuildArch:      noarch
 
 %description -n python-%{name}
 While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
@@ -66,6 +71,33 @@ stacks configuration conversion (as per RHEL trend), the command-filter-format
 framework (capable of XSLT) offers also other uses through its plugin library.
 
 This package contains %{name} library including built-in plugins.
+
+%package bin
+Group:          System Environment/Libraries
+Summary:        Common internal compiled files for %{name}
+License:        GPLv2+
+
+Requires:       %{name}-common = %{version}-%{release}
+
+%description bin
+While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
+stacks configuration conversion (as per RHEL trend), the command-filter-format
+framework (capable of XSLT) offers also other uses through its plugin library.
+
+This package contains internal, arch-specific files for %{name}.
+
+%package common
+Group:          System Environment/Libraries
+Summary:        Common internal data files for %{name}
+License:        GPLv2+
+BuildArch:      noarch
+
+%description common
+While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
+stacks configuration conversion (as per RHEL trend), the command-filter-format
+framework (capable of XSLT) offers also other uses through its plugin library.
+
+This package contains internal, arch-agnostic files for %{name}.
 
 %package lib-general
 Group:          System Environment/Libraries
@@ -82,7 +114,6 @@ reusable formats and filters.
 %package lib-ccs
 Group:          System Environment/Libraries
 Summary:        Extra plugins for transforming/analyzing CMAN configuration
-Requires:       python-%{name} = %{version}-%{release}
 Requires:       %{name}-lib-general = %{version}-%{release}
 BuildArch:      noarch
 
@@ -94,7 +125,6 @@ formats and filters.
 %package lib-pcs
 Group:          System Environment/Libraries
 Summary:        Extra plugins for transforming/analyzing Pacemaker configuration
-Requires:       python-%{name} = %{version}-%{release}
 Requires:       %{name}-lib-general = %{version}-%{release}
 BuildArch:      noarch
 
@@ -109,32 +139,17 @@ formats and filters.
 %if "%{testver}" != "%{version}"
     %{__cp} -a ../"%{name}-%{testver}"/* .
 %endif
-
-## -- following borrowed from python-simplejon.el5 --
-## Update timestamps on the files touched by a patch, to avoid non-equal
-## .pyc/.pyo files across the multilib peers within a build, where "Level"
-## is the patch prefix option (e.g. -p1)
-#UpdateTimestamps() {
-#  Level=$1
-#  PatchFile=$2
-#  # Locate the affected files:
-#  for f in $(diffstat $Level -l $PatchFile); do
-#    # Set the files to have the same timestamp as that of the patch:
-#    touch -r $PatchFile $f
-#  done
-#}
-#
-#patch0 -p1
-#UpdateTimestamps -p1 %{PATCH0}
+%patch0 -p1
 
 ## for some esoteric reason, the line above has to be empty
 %{__python} setup.py saveopts -f setup.cfg pkg_prepare \
-                      --ccs-flatten='%{_libexecdir}/%{name}-%{version}/ccs_flatten' \
-                      --editor='%{_bindir}/nano' \
-                      --ra-metadata-dir='%{_datadir}/cluster' \
-                      --ra-metadata-ext='metadata' \
-                      --shell-posix='%(which sh)' \
-                      --shell-bashlike='%(which bash)'
+                     --ccs-flatten='%{_libexecdir}/%{name}-%{version}/ccs_flatten' \
+                     --editor='%{_bindir}/nano' \
+                     --extplugins-shared='%{_datarootdir}/%{name}/ext-plugins' \
+                     --ra-metadata-dir='%{_datadir}/cluster' \
+                     --ra-metadata-ext='metadata' \
+                     --shell-posix='%(which sh 2>/dev/null || echo /bin/SHELL-POSIX)' \
+                     --shell-bashlike='%(which bash 2>/dev/null || echo /bin/SHELL-BASHLIKE)'
 %{__python} setup.py saveopts -f setup.cfg pkg_prepare \
 --report-bugs='https://bugzilla.redhat.com/enter_bug.cgi?product=Red%20Hat%20Enterprise%20Linux%206&component=clufter'
 # make Python interpreter executation sane (via -Es flags)
@@ -142,7 +157,7 @@ formats and filters.
                      --executable='%{__python} -Es'
 %build
 %{__python} setup.py build
-./run-dev --skip-ext --completion-bash 2>/dev/null \
+%{__python} ./run-dev --skip-ext --completion-bash 2>/dev/null \
   | sed 's|run[-_]dev|%{name}|g' > .bashcomp
 # generate man pages (proper commands and aliases from a sorted sequence)
 %{__mkdir_p} -- .manpages/man1
@@ -200,6 +215,13 @@ sed -i '1s|^\(#!\)"\(.*\)"$|\1\2|' '%{buildroot}%{_bindir}/%{name}'
 test -f '%{buildroot}%{_bindir}/%{name}' \
   || %{__install} -D -pm 644 -- '%{buildroot}%{_bindir}/%{name}' \
                                 '%{buildroot}%{_bindir}/%{name}'
+
+# move ext-plugins from python-specific locations to a single common one
+# incl. the different sorts of precompiled bytecodes
+%{__mkdir_p} -- '%{buildroot}%{_datarootdir}/%{name}/ext-plugins'
+mv -t '%{buildroot}%{_datarootdir}/%{name}/ext-plugins' \
+   -- '%{buildroot}%{python_sitelib}/%{name}'/ext-plugins/*/
+
 declare bashcompdir="$(pkg-config --variable=completionsdir bash-completion \
                        || echo '%{_sysconfdir}/bash_completion.d')"
 declare bashcomp="${bashcompdir}/%{name}"
@@ -236,7 +258,7 @@ declare ret=0 \
         ccs_flatten_dir="$(dirname '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten')"
 ln -s '%{buildroot}%{_datadir}/cluster'/*.'metadata' \
       "${ccs_flatten_dir}"
-PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-tests
+PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" PYTHONEXEC="%{__python} -Es" ./run-tests
 ret=$?
 %{__rm} -f -- "${ccs_flatten_dir}"/*.'metadata'
 [ ${ret} -eq 0 ] || exit ${ret}
@@ -268,37 +290,37 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %files cli -f .bashcomp-files
 %{_mandir}/man1/*.1*
 %{_bindir}/%{name}
-%{python_sitelib}/%{name}/__main__.py*
-%{python_sitelib}/%{name}/main.py*
-%{python_sitelib}/%{name}/completion.py*
-# only useful here, rest of egg-info pulled through internal dependency
-%{python_sitelib}/%{name}-*.egg-info/entry_points.txt
 
 %files -n python-%{name}
+%{python_sitelib}/%{name}
+%{python_sitelib}/%{name}-*.egg-info
+
+%files bin
+%{_libexecdir}/%{name}-%{version}
+
+%files common
+%{_datadir}/cluster
+%{_datarootdir}/%{name}
 %dir %{_defaultdocdir}/%{name}-%{version}
 %{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]]
 %doc %{_defaultdocdir}/%{name}-%{version}/*[[:digit:]].txt
-%exclude %{python_sitelib}/%{name}/__main__.py*
-%exclude %{python_sitelib}/%{name}/main.py*
-%exclude %{python_sitelib}/%{name}/completion.py*
-%exclude %{python_sitelib}/%{name}/ext-plugins/*/
-%{python_sitelib}/%{name}
-%{python_sitelib}/%{name}-*.egg-info
-# entry_points.txt only useful for -cli package
-%exclude %{python_sitelib}/%{name}-*.egg-info/entry_points.txt
-%{_libexecdir}/%{name}-%{version}
-%{_datadir}/cluster
 
 %files lib-general
-%{python_sitelib}/%{name}/ext-plugins/lib-general
+%{_datarootdir}/%{name}/ext-plugins/lib-general
 
 %files lib-ccs
-%{python_sitelib}/%{name}/ext-plugins/lib-ccs
+%{_datarootdir}/%{name}/ext-plugins/lib-ccs
 
 %files lib-pcs
-%{python_sitelib}/%{name}/ext-plugins/lib-pcs
+%{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Thu Mar 15 2018 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.1-1
+- split -bin and -common packages, the former becoming the only arch-specific
+- also move python-specific (entry points, main files) back from -cli package
+- move nano fallback editor dependency to -cli package [PGissue#1]
+- bump upstream package, see https://pagure.io/clufter/releases
+
 * Wed Jan 18 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.8-1
 - bump upstream package, see
   https://github.com/jnpkrn/clufter/releases/tag/v0.59.8

@@ -1,11 +1,16 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+
+from __future__ import print_function
+
 """Base filter stuff (metaclass, decorator, etc.)"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from copy import deepcopy
+from functools import reduce
+from itertools import dropwhile, islice
 from logging import getLogger
 from os import environ, isatty, stat
 from os.path import dirname, join
@@ -32,11 +37,17 @@ from .utils import args2tuple, arg2wrapped, \
                    filterdict_keep, filterdict_invkeep, filterdict_pop, \
                    head_tail, hybridproperty, \
                    identity, lazystring, tuplist
+from .utils_2to3 import MimicMeta, basestring, \
+                        bytes_enc, str_enc, \
+                        iter_items, iter_values, \
+                        filter_u, foreach_u, reduce_u, \
+                        unicode, xrange
 from .utils_lxml import etree_XSLT_safe, \
                         etree_parser_safe, etree_parser_safe_unblanking
 from .utils_func import apply_preserving_depth, \
                         apply_aggregation_preserving_depth, \
                         apply_intercalate, \
+                        foreach, \
                         loose_zip, \
                         zip_empty
 from .utils_prog import FancyOutput, ProtectedDict, \
@@ -95,7 +106,7 @@ class filters(PluginRegistry):
     pass
 
 
-class Filter(object):
+class _Filter(object):
     """Base for filters performing the actual conversion
 
     Base principles:
@@ -103,14 +114,13 @@ class Filter(object):
         - create filter instance = pass particular formats,
           call = start conversion
     """
-    __metaclass__ = filters
 
-    @staticmethod
+    @MimicMeta.staticmethod
     def _resolve_formats_composite(formats):
         # XXX should rather be implemented by CompositeFormat itself?
         composite_onthefly = \
             lambda protocol, *args, **kwargs: \
-                CompositeFormat(protocol, *args, **dict(kwargs.iteritems(),
+                CompositeFormat(protocol, *args, **dict(iter_items(kwargs),
                                                         **{'formats': formats}))
         # XXX currently instantiation only (no match for composite classes)
         composite_onthefly.as_instance = \
@@ -122,7 +132,7 @@ class Filter(object):
         composite_onthefly.context = CompositeFormat.context
         return composite_onthefly
 
-    @classmethod
+    @MimicMeta.classmethod
     def _resolve_formats(cls, formats):
         res_input = [cls.in_format, cls.out_format]
         res_output = apply_preserving_depth(formats.get)(res_input)
@@ -144,13 +154,14 @@ class Filter(object):
             return res_output
         # drop the filter if cannot resolve any of the formats
         res_input = apply_intercalate(res_input)
-        map(lambda (i, x): log.warning("Resolve at `{0}' filter:"
-                                       " `{1}' (#{2}) format fail"
-                                       .format(cls.name, res_input[i], i)),
-            filter(lambda (i, x): not(x),
-                   enumerate(apply_intercalate(res_output))))
+        foreach_u(lambda i, x: log.warning("Resolve at `{0}' filter:"
+                                           " `{1}' (#{2}) format fail"
+                                           .format(cls.name, res_input[i], i)),
+                  filter_u(lambda i, x: not(x),
+                           enumerate(apply_intercalate(res_output))))
         return None
 
+    @MimicMeta.method
     def __new__(cls, formats):
         io_formats = cls._resolve_formats(formats)
         if io_formats is None:
@@ -159,16 +170,17 @@ class Filter(object):
         (self._in_format, self._out_format), self._validated = io_formats, False
         return self
 
-    @hybridproperty
+    @MimicMeta.passdeco(hybridproperty)
     def in_format(this):
         """Input format identifier/class for the filter"""
         return this._in_format
 
-    @hybridproperty
+    @MimicMeta.passdeco(hybridproperty)
     def out_format(this):
         """Output format identifier/class for the filter"""
         return this._out_format
 
+    @MimicMeta.method
     def __call__(self, in_obj, flt_ctxt=None, **kws):
         """Default is to use a function decorated with `deco`"""
         fmt_kws = filterdict_pop(kws, *self.out_format.context)
@@ -179,8 +191,9 @@ class Filter(object):
             cmd_ctxt = CommandContext()
             flt_ctxt = cmd_ctxt.ensure_filter(self)
             # following only possibly without taint protection (this branch)
-            map(lambda d: flt_ctxt.parent.update(filterdict_invkeep(d, *flt_ctxt)),
-                (dict(self.defs), kws))
+            foreach(lambda d:
+                    flt_ctxt.parent.update(filterdict_invkeep(d, *flt_ctxt)),
+                    (dict(self.defs), kws))
         fmt_kws = filterdict_keep(flt_ctxt, *self.out_format.context, **fmt_kws)
         outdecl = self._fnc(flt_ctxt, in_obj)
         outdecl_head, outdecl_tail = head_tail(outdecl)
@@ -189,7 +202,7 @@ class Filter(object):
             fmt_kws['validator_specs'] = {'': ''}
         return self.out_format(outdecl_head, *outdecl_tail, **fmt_kws)
 
-    @classmethod
+    @MimicMeta.classmethod
     def deco(cls, in_format, out_format, defs=None):
         """Decorator as an easy factory of actual filters"""
         def deco_fnc(fnc):
@@ -207,13 +220,16 @@ class Filter(object):
             return ret
         return deco_fnc
 
-    @classmethod
+    @MimicMeta.classmethod
     def ctxt_svc_output(cls, ctxt, msg, **kwargs):
         if 'svc_output' in ctxt:
             svc_output = ctxt['svc_output']
         else:
             svc_output = FancyOutput(f=stderr, prefix="[{0}] ")
         svc_output(msg, prefix_arg=cls.name, **kwargs)
+
+
+Filter = MimicMeta('Filter', filters, _Filter)
 
 
 def tag_log(s, elem):
@@ -317,7 +333,7 @@ class XMLFilter(Filter, MetaPlugin):
                     tree_stack[-1][2][elem] = proceed(walk[0], elem, children)
                     try:
                         log.debug("Proceeded {0}".format(
-                                  etree.tostring(tree_stack[-1][2][elem]).replace('\n', '')))
+                                  etree.tostring(tree_stack[-1][2][elem], encoding='unicode').replace('\n', '')))
                     except AttributeError:
                         log.debug("Proceeded {0}".format(tree_stack[-1][2][elem]))
 
@@ -326,8 +342,8 @@ class XMLFilter(Filter, MetaPlugin):
                 #    skip_until = [('end', tree_stack[-1][0])]
                 #    log.debug("Skipping (C) until: {0}".format(skip_until))
 
-        ret = tree_stack[-1][2].values()
-        # XXX can be [] in case of not finding anything, should we emit error?
+        ret = tuple(iter_values(tree_stack[-1][2]))
+        # XXX can be () in case of not finding anything, should we emit error?
         #     addendum: sometimes comments (top-level only?) will cause this
         return postprocess(ret)
 
@@ -387,9 +403,10 @@ class XMLFilter(Filter, MetaPlugin):
         reply, force = '', ''
         try:
             tmp_name = ""
-            tmp = NamedTemporaryFile(dir=tmpdir, suffix='.xml', delete=False)
+            tmp = NamedTemporaryFile(mode='wb', dir=tmpdir, suffix='.xml',
+                                     delete=False)
             with tmp as tmpfile:
-                tmpfile.write(prompt)
+                tmpfile.write(bytes_enc(prompt, 'utf-8'))
                 tmpfile.flush()
                 tmp_name = tmp.name
             old_stat = stat(tmp_name)
@@ -417,7 +434,7 @@ class XMLFilter(Filter, MetaPlugin):
             # modifications (sed definitely doesn't; see also
             # http://www.pixelbeat.org/docs/unix_file_replacement.html),
             # otherwise tmpfile.seek(0) would be enough
-            with open(tmp_name, 'r') as tmpfile:
+            with open(tmp_name, 'rb') as tmpfile:
                 reply = tmpfile.read().strip()
         finally:
             rmtree(tmpdir)
@@ -482,7 +499,9 @@ class XMLFilter(Filter, MetaPlugin):
                     global_msgs.extend(msgs)
                     break
                 parent_pos = element_juggler.grab(elem)
-                res_snippet = etree.tostring(elem, pretty_print=True)
+                res_snippet = str_enc(etree.tostring(elem, pretty_print=True,
+                                                     encoding='UTF-8'),
+                                      'utf-8').strip()
                 force = False
                 for i in xrange(2, 0, -1):  # 2 subsequent NOOPs -> termination
                     try:
@@ -495,15 +514,14 @@ class XMLFilter(Filter, MetaPlugin):
                     if elems is not None:  # active change
                         break
                 else:
-                    print >>stderr, ("Opportunity to recover the invalid"
-                                     " (intermediate) result was repeatedly"
-                                     " abandoned")
+                    print("Opportunity to recover the invalid (intermediate)"
+                          " result was repeatedly abandoned", file=stderr)
                     elems = False
 
                 if not elems:
                     element_juggler.drop(elem)
                     if elems is False:
-                        print >>stderr, "Terminating"
+                        print("Terminating", file=stderr)
                         raise SystemExit
                 elif single_elem:
                     assert len(elems) == 1
@@ -565,10 +583,10 @@ class XMLFilter(Filter, MetaPlugin):
             emsg = cls._re_highlight.sub('\g<lp>|highlight:\g<msg>|\g<rp>',
                                          emsg)
             svc_output("|subheader:xslt:| {0}".format(emsg), urgent=urgent,
-                       base=reduce(
-                           lambda now, (new, new_l):
+                       base=reduce_u(
+                           lambda now, new, new_l:
                                now or (emsg.startswith(new) and new_l),
-                           {'WARNING:': 'warning', 'NOTE:': 'note'}.iteritems(),
+                           iter_items({'WARNING:': 'warning', 'NOTE:': 'note'}),
                            ''
                        ) or urgent and 'error')
             if urgent:
@@ -590,7 +608,7 @@ class XMLFilter(Filter, MetaPlugin):
                                                            *e[2:]))
                              for e in entries)
         if fatal:
-            raise FilterPlainError("FAILED filter: {0}".format(cls.name))
+            raise FilterError(cls, "{0}".format(', '.join(fatal)))
         return ret
 
     @staticmethod
@@ -653,7 +671,7 @@ class XMLFilter(Filter, MetaPlugin):
                     at_hooks = hooks.setdefault(at, [])
                     at_hooks.append((walk, mix))
                     if len(at_hooks) > 1:
-                        msg = ("Ambigous match for `{0}' tag ({1} vs {2})"
+                        msg = ("Ambiguous match for `{0}' tag ({1} vs {2})"
                                .format(at, walk, at_hooks[0]))
                         if not mix:
                             raise FilterError(None, msg)
@@ -695,7 +713,7 @@ class XMLFilter(Filter, MetaPlugin):
                 not do_mix or parent[1] is None):
                 top = filter(lambda x: x.tag in TOP_LEVEL_XSL, parent[0])
                 for e in top:
-                    #print "at", etree.tostring(ret), "appending", etree.tostring(e)
+                    #print("at", etree.tostring(ret), "appending", etree.tostring(e))
                     ret.append(deepcopy(e))
 
             log.debug("do_mix {0}, hooks {1}".format(do_mix, hooks))
@@ -740,7 +758,7 @@ class XMLFilter(Filter, MetaPlugin):
                             l = scheduled.setdefault(h, [])
                             l.append(children[c_elem].getroot())
 
-            for (index_history, mix), substitutes in scheduled.iteritems():
+            for (index_history, mix), substitutes in iter_items(scheduled):
                 tag = reduce(lambda x, y: x[y], index_history, snippet)
                 parent = tag.getparent()
                 index = parent.index(tag)
@@ -751,7 +769,9 @@ class XMLFilter(Filter, MetaPlugin):
                     if s.tag == namespaced(CLUFTER_NS, 'snippet'):
                         # only single root "detached" supported (first == last)
                         dst = parent
-                        dst.attrib.update(dict(s.attrib))
+                        # cannot use dict.update(dict) because of losing order
+                        for k in s.attrib:
+                            dst.attrib[k] = s.attrib[k]
                         #dst[index:index] = s
                         tag.extend(s)
                     elif mix:
@@ -814,7 +834,7 @@ class XMLFilter(Filter, MetaPlugin):
                     xslt_root.append(e)
 
             # if something still remains, we assume it is "template"
-            if filter(lambda x: x.tag not in TOP_LEVEL_XSL, snippet):
+            if tuple(islice(dropwhile(lambda x: x.tag in TOP_LEVEL_XSL, snippet), 1)):
                 log.debug("snippet0: {0}, {1}, {2}".format(do_mix, elem.tag, etree.tostring(snippet)))
                 template = nselem(XSL_NS, 'template', match=elem.tag)
                 if do_mix:
@@ -827,7 +847,7 @@ class XMLFilter(Filter, MetaPlugin):
                 ##    template = snippet
                 # ^ XXX was extend
                 xslt_root.append(template)
-                #print "ee", etree.tostring(xslt_root)
+                #print("ee", etree.tostring(xslt_root))
 
             # append "identity" to preserve application
             if do_mix > 1 or elem.getparent() is None and not children:
@@ -837,7 +857,7 @@ class XMLFilter(Filter, MetaPlugin):
 
             #else:
             #    # we dont't apply if there is nothing local and not at root
-            #    print "zdrham", elem.tag
+            #    print("zdrham", elem.tag)
             #    return elem
 
             if do_mix and elem.getparent() is not None:
@@ -911,7 +931,7 @@ class XMLFilter(Filter, MetaPlugin):
         ret = []
         while len(scheduled_walk):
             cur_walk = scheduled_walk.pop()
-            for key, (transformer, children) in cur_walk.iteritems():
+            for key, (transformer, children) in iter_items(cur_walk):
                 scheduled_walk.append(children)
                 if transformer is None or callable(transformer):
                     if callable(transformer):
@@ -919,7 +939,7 @@ class XMLFilter(Filter, MetaPlugin):
                                     " callable present")
                     if key in scheduled_subst:
                         for tag in scheduled_subst.pop(key)[:]:
-                            for child_tag in children.iterkeys():
+                            for child_tag in children:
                                 l = scheduled_subst.setdefault(child_tag, [])
                                 l.append(tag)
                     continue
@@ -951,15 +971,14 @@ class XMLFilter(Filter, MetaPlugin):
                         parent[parent.index(tag)] = e
                         ret[-1].append(snippet)
                 # in parallel: 2?
-                for target_tag, at_hooks in hooks.iteritems():
-                    for (index_history, mix) in at_hooks:
+                for target_tag, at_hooks in iter_items(hooks):
+                    for index_history, mix in at_hooks:
                         tag = reduce(lambda x, y: x[y], index_history, snippet)
                         l = scheduled_subst.setdefault(target_tag, [])
                         l.append(tag)
 
         assert not len(scheduled_subst)  # XXX either fail or remove forcibly
-        map(lambda x: etree.cleanup_namespaces(x), ret)
-        ret = map(lambda x: x, ret)
+        foreach(lambda x: etree.cleanup_namespaces(x), ret)
 
         return (lambda x: x[0] if len(x) == 1 else x)(ret)
 
@@ -992,7 +1011,7 @@ class XMLFilter(Filter, MetaPlugin):
                 def_first += ('<xsl:param name="system_{0}" select="{1}"/>'
                               .format(str(i), squote(val)))
         if textmode:
-            def_first += '<xsl:output method="text"/>'
+            def_first += '<xsl:output method="text" encoding="UTF-8"/>'
             def_first += '<xsl:strip-space elements="*"/>'
             def_first += '<clufter:descent-mix preserve-rest="false"/>'
         else:
@@ -1012,7 +1031,7 @@ class XMLFilter(Filter, MetaPlugin):
             ret = etree.fromstring(etree.tostring(ret),
                                    parser=etree_parser_safe_unblanking)
         elif textmode:
-            ret = str(ret)
+            ret = bytes_enc(unicode(ret), 'utf-8')
         return ret
 
     def ctxt_proceed_xslt(self, ctxt, in_obj, **kwargs):

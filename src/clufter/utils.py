@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Various little+independent helpers"""
@@ -8,10 +8,16 @@ __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 from itertools import takewhile
 from types import GeneratorType
 
+from .utils_2to3 import PY3, basestring, iter_items
+
 
 # inspired by http://stackoverflow.com/a/4374075
-immutable = lambda x: isinstance(x, (basestring, int, long, bool, float, tuple,
-                                     GeneratorType))
+if PY3:
+    immutable = lambda x: isinstance(x, (basestring, int, bool, float, tuple,
+                                         GeneratorType))
+else:
+    immutable = lambda x: isinstance(x, (basestring, int, long, bool, float,
+                                         tuple, GeneratorType))
 
 tuplist = lambda x: isinstance(x, (tuple, list, set))
 # turn args into tuple unless single tuplist arg
@@ -26,7 +32,8 @@ args2unwrapped = \
 args2tuple = lambda *args: args
 any2iter = \
     lambda x: \
-        x if hasattr(x, 'next') and hasattr(x.next, '__call__') \
+        x if hasattr(getattr(x, 'next', getattr(x, '__next__', None)),
+                     '__call__') \
         else iter(args2sgpl(x, None))
 
 head_tail = \
@@ -45,13 +52,13 @@ identity = lambda x: x
 
 filterdict_map = \
     lambda fn, src, *which, **update: \
-        dict((x, fn(x)) for x in which if x in src, **update)
+        dict(((x, fn(x)) for x in which if x in src), **update)
 
 # .copy() so as to allow for in-situ manipulations like .pop() without
 # affecting the running iteration
 filterdict_invmap = \
     lambda fn, src, *which, **update: \
-        dict((x, fn(x)) for x in src.copy() if x not in which, **update)
+        dict(((x, fn(x)) for x in src.copy() if x not in which), **update)
 
 #
 
@@ -140,9 +147,9 @@ def popattr(obj, what, *args):
 def iterattrs(obj, skip_private=True):
     """Iterate through (unbound) attributes of obj, skipping private or not"""
     if skip_private:
-        return ((n, v) for n, v in obj.__dict__.iteritems()
+        return ((n, v) for n, v in iter_items(obj.__dict__)
                 if not n.startswith('__'))
-    return obj.__dict__.iteritems()
+    return iter_items(obj.__dict__)
 
 
 def func_defaults_varnames(func, skip=0):
@@ -151,12 +158,12 @@ def func_defaults_varnames(func, skip=0):
     Parameters:
         skip                how many initial arguments to skip
     """
-    code = func.func_code
+    code = func.__code__
     func_varnames = code.co_varnames[skip:code.co_argcount]
 
     func_defaults = dict(zip(
         reversed(func_varnames),
-        reversed(func.func_defaults)
+        reversed(func.__defaults__),
     ))
 
     return func_defaults, func_varnames
@@ -170,8 +177,8 @@ def selfaware(func):
     """Decorator suitable for recursive staticmethod"""
     def selfaware_inner(*args, **kwargs):
         return func(selfaware(func), *args, **kwargs)
-    map(lambda a: setattr(selfaware_inner, a, getattr(func, a)),
-        ('__doc__', '__name__'))
+    for attr in ('__doc__', '__name__'):
+        setattr(selfaware_inner, attr, getattr(func, attr))
     return selfaware_inner
 
 

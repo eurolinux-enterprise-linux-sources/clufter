@@ -1,11 +1,12 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """XSLT helpers"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from .utils_xml import NAMESPACES, XSL, squote
+from .utils_2to3 import basestring, iter_items, xrange
 
 
 NL = '&#xa;'
@@ -38,7 +39,7 @@ def xslt_boolean(param):
 def xslt_params(**d):
     """Convert a provided dictionary into textual XSLT params"""
     ret = ""
-    for k, v in d.iteritems():
+    for k, v in iter_items(d):
         ret += '<xsl:param name="{0}" select="{1}"/>\n'.format(
             k, xslt_boolean(v) if isinstance(v, bool)
             else squote(v) if isinstance(v, basestring)
@@ -65,7 +66,7 @@ def xslt_id_friendly(inner):
 def xslt_string_mapping(d, what="."):
     """Convert dictionary into procedural mapping application (`xsl:when`s)"""
     ret = []
-    for k, v in d.iteritems():
+    for k, v in iter_items(d):
         if not isinstance(v, basestring):
             continue
         ret.append('''\

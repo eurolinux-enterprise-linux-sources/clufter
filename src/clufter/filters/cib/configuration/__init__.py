@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -205,21 +205,86 @@ cib2pcscmd = ('''\
 ''' + (
         verbose_ec_test
 ) + '''
+        <xsl:if test="$pcscmd_extra_push_diff">
+''' + (
+            verbose_inform('"store the original CIB for later comparison: ",'
+                           ' $pcscmd_tmpcib, ".deltasrc"')
+) + '''
+            <xsl:value-of select="concat('cp ', $pcscmd_tmpcib,
+                                         ' ', $pcscmd_tmpcib, '.deltasrc')"/>
+            <xsl:value-of select="'%(NL)s'"/>
+''' + (
+            verbose_ec_test
+) + '''
+        </xsl:if>
     </xsl:if>
     <clufter:descent-mix at="crm_config"/>
     <clufter:descent-mix at="rsc_defaults"/>
     <clufter:descent-mix at="op_defaults"/>
     <clufter:descent-mix at="nodes"/>
     <clufter:descent-mix at="resources"/>
+    <!-- constraints may refer to resource IDs from above -->
     <clufter:descent-mix at="constraints"/>
+    <!-- fencing-level may refer to resource IDs from above,
+         not enforced by schemas per se, but pcs mandates
+         the referential integrity here, anyway
+         (https://bugzilla.redhat.com/1441332#c7) -->
     <clufter:descent-mix at="fencing-topology"/>
     <clufter:descent-mix at="alerts"/>
-    <xsl:if test="not($pcscmd_dryrun) and $pcscmd_tmpcib">
+    <!-- acls may refer to particular IDs (any) from above -->
+    <clufter:descent-mix at="acls"/>
+
+    <!-- enabling ACLs is sensible only at the very end of processing
+         (was explicitly skipped while descenting into crm_config)
+         XXX: should be more smoothly solved by using different modes
+              with xsl:apply-templates, but that'd be quite an effort -->
+    <xsl:variable name="CibAclEnable"
+                  select="crm_config/cluster_property_set/nvpair[@name='enable-acl']"/>
+    <xsl:if test="$CibAclEnable">
+
+
+        <!-- "pcs acl" only supported with certain newer versions of
+             pacemaker/pcs (https://bugzilla.redhat.com/1111369) -->
+        <xsl:choose>
+            <xsl:when test="$pcscmd_extra_acls">
 ''' + (
-        verbose_inform('"push CIB: ", $pcscmd_tmpcib')
+                verbose_inform('"set singleton cluster property: ", $CibAclEnable/@name')
 ) + '''
-        <xsl:value-of select="concat('pcs cluster cib-push ',
-                                     $pcscmd_tmpcib, ' --config')"/>
+                <xsl:value-of select='concat($pcscmd_pcs, "property set")'/>
+                <xsl:if test="$pcscmd_force">
+                    <xsl:value-of select="' --force'"/>
+                </xsl:if>
+                <xsl:value-of select='concat(" &apos;", $CibAclEnable/@name,
+                                             "=", $CibAclEnable/@value, "&apos;")'/>
+                <xsl:value-of select="'%(NL)s'"/>
+''' + (
+                verbose_ec_test
+) + '''
+            </xsl:when>
+            <xsl:otherwise>
+                <xsl:message>%(acls_msg)s</xsl:message>
+            </xsl:otherwise>
+        </xsl:choose>
+    </xsl:if>
+
+    <xsl:if test="not($pcscmd_dryrun) and $pcscmd_tmpcib">
+        <xsl:choose>
+            <xsl:when test="$pcscmd_extra_push_diff">
+''' + (
+                verbose_inform('"push CIB (sending just the delta): ", $pcscmd_tmpcib')
+) + '''
+                <xsl:value-of select="concat('pcs cluster cib-push ',
+                                             $pcscmd_tmpcib, ' diff-against=',
+                                             $pcscmd_tmpcib, '.deltasrc')"/>
+            </xsl:when>
+            <xsl:otherwise>
+''' + (
+                verbose_inform('"push CIB: ", $pcscmd_tmpcib')
+) + '''
+                <xsl:value-of select="concat('pcs cluster cib-push ',
+                                             $pcscmd_tmpcib, ' --config')"/>
+            </xsl:otherwise>
+        </xsl:choose>
         <xsl:value-of select="'%(NL)s'"/>
 ''' + (
         verbose_ec_test
@@ -227,11 +292,15 @@ cib2pcscmd = ('''\
     </xsl:if>
 ''') % dict(
     NL=NL,
+    acls_msg="WARNING: target pacemaker/pcs versions do not support"
+             " (new) ACLs, hence &apos;enable-acl&apos; property omitted",
 )
 
 ###
 
 from ....utils_xslt import xslt_is_member, xslt_string_mapping
+
+from itertools import chain
 
 cib_revitalize_deprecated_props_cluster_rsc = {
     'default-resource-stickiness': 'resource-stickiness',
@@ -243,8 +312,8 @@ cib_revitalize_deprecated_props_cluster_op = {
 }
 
 cib_revitalize_deprecated_props_cluster = \
-    cib_revitalize_deprecated_props_cluster_rsc.keys() \
-    + cib_revitalize_deprecated_props_cluster_op.keys()
+    chain(cib_revitalize_deprecated_props_cluster_rsc,
+          cib_revitalize_deprecated_props_cluster_op)
 
 cib_revitalize = ('''\
     <xsl:copy>

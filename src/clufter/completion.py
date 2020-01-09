@@ -1,14 +1,16 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Shell completion formatters"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
+from functools import reduce
 from os.path import basename
 
 from .utils import args2sgpl
-from .utils_func import bifilter
+from .utils_2to3 import basestring, reduce_uu
+from .utils_func import bifilter_unpack
 from .utils_prog import cli_undecor
 
 
@@ -31,12 +33,12 @@ class Completion(object):
         return ''
 
     def __call__(self, commands):
-        cmds, aliases = bifilter(
-            lambda (name, obj): not isinstance(obj, basestring),
+        cmds, aliases = bifilter_unpack(
+            lambda name, obj: not isinstance(obj, basestring),
             commands
         )
-        handles, scripts = reduce(
-            lambda (acc_handle, acc_script), (cmd_name, cmd):
+        handles, scripts = reduce_uu(
+            lambda acc_handle, acc_script, cmd_name, cmd:
                 (lambda handle, script: (
                     acc_handle + [(cmd_name, handle)],
                     acc_script + [script]

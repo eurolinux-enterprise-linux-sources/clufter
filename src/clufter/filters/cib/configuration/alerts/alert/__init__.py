@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -34,6 +34,18 @@ cib2pcscmd = ('''\
 ''' + (
             verbose_ec_test
 ) + '''
+            <!-- select (CIB 2.10+)  -->
+            <xsl:if test="select">
+                <xsl:choose>
+                    <xsl:when test="$pcscmd_extra_alerts_select">
+                        <xsl:message>%(alerts_select_notimpl_msg)s</xsl:message>
+                    </xsl:when>
+                    <xsl:otherwise>
+                        <xsl:message>%(alerts_select_msg)s</xsl:message>
+                    </xsl:otherwise>
+                </xsl:choose>
+            </xsl:if>
+
             <!-- recipients -->
             <xsl:for-each select="recipient">
 ''' + (
@@ -66,6 +78,11 @@ cib2pcscmd = ('''\
     </xsl:choose>
 ''') % dict(
     NL=NL,
-    alerts_msg="WARNING: target pacemaker+pcs versions do not support"
+    alerts_msg="WARNING: target pacemaker/pcs versions do not support"
                " alerts, hence omitted",
+    alerts_select_msg="WARNING: target pacemaker/pcs versions do not support"
+                      " 'select' construct for alerts, hence omitted",
+    alerts_select_notimpl_msg="WARNING: waiting for pcs to honor 'select'"
+                              " construct for alerts in its syntax"
+                              " (https://bugzilla.redhat.com/1512707)",
 )
