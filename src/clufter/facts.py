@@ -5,11 +5,16 @@
 """Utility functions wrt. cluster systems in general"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
+try:
+    from itertools import zip_longest
+except ImportError:  # PY2 backward compatibility
+    from itertools import izip_longest as zip_longest
 from logging import getLogger
 
 from .error import ClufterPlainError
 from .utils import args2sgpl
-from .utils_2to3 import basestring, iter_items, iter_values, reduce_u
+from .utils_2to3 import basestring, enumerate_u, iter_items, iter_values, \
+                        reduce_u
 from .utils_func import apply_intercalate
 
 log = getLogger(__name__)
@@ -60,9 +65,17 @@ cluster_map = {
                 }),
                 ((9, ), {
                     # https://packages.debian.org/stretch/$PACKAGE
-                    'corosync':                      (2, 3, 5),
-                    'pacemaker[+coro]':              (1, 1, 15),
-                    'resource-agents':               (3, 9, 7),
+                    'corosync':                      (2, 4, 2),
+                    'pacemaker[+coro]':              (1, 1, 16),
+                    'pcs':                           (0, 9, 155),
+                    'resource-agents':               (4, 0, 0),  # rc1
+                }),
+                # currently a moving target
+                ((10, ), {
+                    # https://packages.debian.org/buster/$PACKAGE
+                    'pacemaker[+coro]':              (1, 1, 18),  # rc3
+                    'pcs':                           (0, 9, 161),
+                    'resource-agents':               (4, 0, 1),
                 }),
             ),
             'fedora': (
@@ -139,14 +152,20 @@ cluster_map = {
                     'resource-agents':               (3, 9, 7),
                 }),
                 ((25, ), {
-                    'corosync':                      (2, 4),
+                    'corosync':                      (2, 4, 1),
                     #'pacemaker[+coro]':              (1, 1, 16),  # updates
                     'pcs':                           (0, 9, 154),
                 }),
-                # coming...
                 ((26, ), {
-                    'resource-agents':               (4, 0, 1),
+                    'corosync':                      (2, 4, 2),
                     'pacemaker[+coro]':              (1, 1, 17),
+                    'pcs':                           (0, 9, 156),
+                    'resource-agents':               (4, 0, 1),
+                }),
+                # coming...
+                ((27, ), {
+                    #'corosync':                      (2, 4, 3),  # updates
+                    'pcs':                           (0, 9, 159),
                 }),
             ),
             'redhat': (
@@ -220,8 +239,15 @@ cluster_map = {
                     'pcs':                           (0, 9, 153),  # 152+patches
                 }),
                 ((7, 4), {
-                    'pacemaker[+coro,+bundle]':      (1, 1, 16),   # guess
-                    'pcs':                           (0, 9, 158),  # guess
+                    'pacemaker[+coro,+bundle]':      (1, 1, 16),
+                    'pcs':                           (0, 9, 158),
+                }),
+                # coming...
+                ((7, 5), {
+                    'corosync':                      (2, 4, 3),    # guess
+                    'pacemaker[+coro]':              (1, 1, 18),   # guess
+                    'pcs':                           (0, 9, 162),  # guess
+
                 }),
             ),
             'ubuntu': (
@@ -266,6 +292,11 @@ cluster_map = {
                     'pcs':                           (0, 9, 155),  # universe
                     'resource-agents':               (4, 0, 0),
                 }),
+                ((17, 10), {
+                    # https://packages.ubuntu.com/artful/$PACKAGE
+                    'pcs':                           (0, 9, 159),  # universe
+                    'resource-agents':               (4, 0, 1),
+                }),
             ),
         },
 }
@@ -298,11 +329,13 @@ aliases_rel = {
         'needle':     '2',
     },
     'debian': {  # because of http://bugs.python.org/issue9514 @ 2.6 ?
-        'squeeze':    '6',
-        'wheezy':     '7',
-        'jessie':     '8',
-        'stretch':    '9',
-        'stretch/sid': '9.999',  # XXX ?
+        'squeeze':      '6',
+        'wheezy':       '7',
+        'jessie':       '8',
+        'stretch':      '9',
+        'buster':      '10',
+        #'buster/sid':  '10.999',  # XXX ?
+        #'bullseye':    '11',
     },
     'ubuntu': {
         '13.04':      '13.4',
@@ -319,8 +352,10 @@ aliases_rel = {
         'yakkety':    '16.10',  # Yakkety Yak
         '17.04':      '17.4',
         'zesty':      '17.4',   # Zesty Zapus
-        # https://wiki.ubuntu.com/ArtfulAardvark/ReleaseSchedule
-        #'artful':     '17.10',  # Artful Aardvark
+        'artful':     '17.10',  # Artful Aardvark
+        # https://wiki.ubuntu.com/BionicBeaver/ReleaseSchedule
+        #'bionic':     '18.4',
+        #'18.04':      '18.4',   # Bionic Beaver
     }
 }
 
@@ -329,6 +364,8 @@ versions_extra = {
     'corosync': (
         ((2, 4),
             '+qdevice,+qnet'),
+        ((2, 4, 3),
+            '+qdevice-heuristics'),
     ),
     'pacemaker': (
         # see also http://wiki.clusterlabs.org/wiki/ReleaseCalendar
@@ -344,9 +381,12 @@ versions_extra = {
             '+alerts,+schema-2.5'),
         ((1, 1, 16),
             '+schema-2.6'),
-        # coming...
         ((1, 1, 17),
+            # note that for our purposes, bundle ~ bundle-extra
             '+bundle,+schema-2.9'),
+        # coming...
+        ((1, 1, 18),
+            '+schema-2.10'),
     ),
     'pcs': (
         ((0, 9, 123),
@@ -370,7 +410,23 @@ versions_extra = {
             '+push-diff'),
         # http://lists.clusterlabs.org/pipermail/users/2017-May/005824.html
         ((0, 9, 158),
-            '+bundle'),  # https://bugzilla.redhat.com/1433016
+            # https://bugzilla.redhat.com/1433016
+            # and https://bugzilla.redhat.com/1165821, respectively
+            '+bundle,+corosync-encryption-forced'),
+        # http://oss.clusterlabs.org/pipermail/users/2017-June/005965.html
+        ((0, 9, 159),
+            # https://bugzilla.redhat.com/1447910
+            # and https://bugzilla.redhat.com/1165821, respectively (1+2)
+            '+bundle-meta,-corosync-encryption-forced,+corosync-encryption'),
+        # http://oss.clusterlabs.org/pipermail/users/2017-October/006590.html
+        #((0, 9, 160),
+        #    ),
+        # http://oss.clusterlabs.org/pipermail/users/2017-November/006744.html
+        #((0, 9, 161),
+        #    ),
+        ((0, 9, 162),
+            # speculative at this point :-/
+            '+qdevice-heuristics'),
     ),
     'resource-agents': (
         # http://lists.linux-ha.org/pipermail/linux-ha/2011-June/043321.html
@@ -407,19 +463,29 @@ def _parse_ver(s):
     if ver:
         try:
             ver = aliases_rel[name][ver]
+            log.debug("resolved: {0}".format(ver))
         except KeyError:
             pass
         ver = tuple(map(int, ver.split('.')))
     return name, ver
 
 
-def _cmp_ver(v1, v2):
+def _cmp_ver(v1, v2, asymmetric=False):
+    """Compare two given encodings of the version
+
+    Parameters:
+        v1            first operand (version tuple if not None)
+        v2            second operand (version tuple if not None)
+        asymmetric    do not compare absolutely, just the prefix match
+    """
     if v1 and v2:
-        v1, v2 = list(reversed(v1)), list(reversed(v2))
-        while v1 and v2:
-            i1, i2 = v1.pop(), v2.pop()
+        len_v1, len_v2 = len(v1), len(v2)
+        len_shorter = len_v1 if len_v1 <= len_v2 else len_v2
+        for i, i1, i2 in enumerate_u(zip_longest(v1, v2, fillvalue=0)):
             if i1 == i2:
                 continue
+            if asymmetric and i > len_shorter:
+                break
             return 1 if i1 > i2 else -1
     return 0
 
@@ -590,7 +656,8 @@ def infer_comp(comp, branches=None):
         for c, c_ver in iter_items(b):
             c, c_extra = _parse_extra(c)
             if c == comp:
-                if (isinstance(c_ver, tuple) and _cmp_ver(comp_ver, c_ver)
+                if (isinstance(c_ver, tuple)
+                        and _cmp_ver(comp_ver, c_ver, asymmetric=True) > 0
                         or comp_extra and comp_extra.difference(c_extra)):
                     continue
                 ret.append(b)

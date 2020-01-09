@@ -1,9 +1,9 @@
 # -*- coding: UTF-8 -*-
-version, alpha = '0.76.0', False
+version, alpha = '0.77.0', False
 
 # https://www.python.org/dev/peps/pep-0440 + git export magic using export-subst
-_git_hash = "c06efc1".strip('$').replace("Format:%h", "")
-_git_deco = ' (HEAD -> master, tag: v0.76.0)'.strip('$()').replace("Format:%d", "")
+_git_hash = "7348966".strip('$').replace("Format:%h", "")
+_git_deco = ' (HEAD -> master, tag: v0.77.0, pg/master, gh/master)'.strip('$()').replace("Format:%d", "")
 _git_deco_arr = _git_deco.split(', ')
 _git_tags = [i for i in _git_deco_arr if i.startswith("tag: v")]
 _git_branches = [i for i in _git_deco_arr if i not in _git_tags + ['HEAD']]

@@ -1,12 +1,12 @@
 Metadata-Version: 1.1
 Name: clufter
-Version: 0.76.0
+Version: 0.77.0
 Summary: Tool/library for transforming/analyzing cluster configuration formats
 Home-page: https://github.com/jnpkrn/clufter
 Author: Jan Pokorný and plugin authors
 Author-email: jpokorny+pkg-clufter@redhat.com
 License: GPLv2+
-Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.76.0
+Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.77.0
 Description: ==========================
          clufter (CLUster FilTER)
         ==========================
