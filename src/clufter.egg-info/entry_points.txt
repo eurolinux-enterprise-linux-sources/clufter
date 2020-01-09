@@ -1,0 +1,3 @@
+[console_scripts]
+clufter = clufter.__main__
+

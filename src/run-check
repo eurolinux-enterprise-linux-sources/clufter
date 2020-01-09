@@ -1,0 +1,169 @@
+#!/bin/sh
+# Copyright 2015 Red Hat, Inc.
+# Part of clufter project
+# Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+
+# Depending on the usage, quick sanity check or just the prologue for run-tests
+
+s="${0}"
+[ $# -gt 0 ] && {
+    case "${1}" in
+    -*) ;;
+    *) s="${1}"; shift ;;
+    esac
+}
+
+PATH="${PATH:+${PATH}:}$(
+  dirname "$(pwd)/$(
+    ls -l "$(echo "${s}" | sed 's|\./||')" | cut -d'>' -f2 | awk '{print $NF}'
+  )"
+)"
+unset s
+
+PYTHONEXEC="python2 -Es"
+
+echo "Current path: ${PATH}"
+which ccs_flatten 2>/dev/null || (
+    cd __root__ 2>/dev/null || :
+    ${PYTHONEXEC} setup.py pkg_prepare --build-develop
+    # can drop the latter when reasonably recent coreutils spread around (8.22?)
+    ln -frs -- ccs-flatten/*.metadata build 2>/dev/null \
+    || ( cd build; ln -fs -- ../ccs-flatten/*.metadata . )
+    ln -fs -- build/ccs_flatten .
+    make -C ccs-flatten symlink
+) || { ret=$?; echo "ccs_flatten missing, cannot be built"; exit ${ret}; }
+
+run_check() {
+    # self-check for sanity usage
+    testcib="$(mktemp)" testcoro="$(mktemp)"
+    { { ${PYTHONEXEC} run-dev ccs2pcs-needle --dist redhat,7.1,Maipo \
+	                                     "${@}" -- - - "${testcib}" \
+        | grep -Ev 'key: _NOT_SECRET--' > "${testcoro}"; } \
+    && echo "TEST: execution OK" \
+    || { echo "TEST: execution FAIL"; ret=20; }; }<<EOF
+<?xml version="1.0"?>
+<cluster name="one" config_version="6">
+  <logging debug="on"/>
+  <clusternodes>
+    <clusternode name="rhel6-node1" votes="1" nodeid="1">
+      <fence>
+        <method name="single">
+          <device name="xvm" domain="rhel6-node1"/>
+        </method>
+      </fence>
+    </clusternode>
+    <clusternode name="rhel6-node2" votes="1" nodeid="2">
+      <fence>
+        <method name="single">
+          <device name="xvm" domain="rhel6-node2"/>
+        </method>
+      </fence>
+    </clusternode>
+  </clusternodes>
+  <fencedevices>
+    <fencedevice name="xvm" agent="fence_xvm"/>
+  </fencedevices>
+  <quorumd label="qdisk"/>
+  <rm central_processing="1">
+    <failoverdomains>
+      <failoverdomain name="failover_domain1" ordered="1" restricted="1" nofailback="1">
+        <failoverdomainnode name="rhel6-node1" priority="1"/>
+        <failoverdomainnode name="rhel6-node2" priority="1"/>
+      </failoverdomain>
+    </failoverdomains>
+    <resources>
+      <ip address="192.168.0.128" monitor_link="1"/>
+    </resources>
+    <service autostart="1" name="mm" domain="failover_domain1">
+    <!-- service exclusive="0" autostart="1" name="mm" -->
+      <ip ref="192.168.0.128"/>
+    </service>
+  </rm>
+</cluster>
+EOF
+    { diff -u -- - "${testcib}" \
+      && echo "TEST: cib diff OK" \
+      || { echo "TEST: cib diff FAIL"; ret=21; }; }<<EOF
+<cib validate-with="pacemaker-1.2" admin_epoch="0" epoch="0" num_updates="0" update-client="$(${PYTHONEXEC} run-dev --version | head -n1)">
+  <configuration>
+    <crm_config/>
+    <nodes>
+      <node id="1" uname="rhel6-node1" type="member"/>
+      <node id="2" uname="rhel6-node2" type="member"/>
+    </nodes>
+    <resources>
+      <!-- FENCING/STONITH (+ POSSIBLY TOPOLOGY BELOW) -->
+      <primitive id="FENCEDEV-xvm" class="stonith" type="fence_xvm">
+        <instance_attributes id="FENCEDEV-xvm-ATTRS">
+          <nvpair id="FENCEDEV-xvm-ATTRS-pcmk_host_map" name="pcmk_host_map" value="rhel6-node1:rhel6-node1,rhel6-node2:rhel6-node2"/>
+        </instance_attributes>
+      </primitive>
+      <!-- RESOURCES+ARRANGEMENT -->
+      <group id="SERVICE-mm-GROUP">
+        <primitive id="RESOURCE-ip-192.168.0.128" description="natively converted from ip RA" class="ocf" provider="heartbeat" type="IPaddr2">
+          <instance_attributes id="RESOURCE-ip-192.168.0.128-ATTRS">
+            <nvpair id="RESOURCE-ip-192.168.0.128-ATTRS-ip" name="ip" value="192.168.0.128"/>
+          </instance_attributes>
+        </primitive>
+        <!-- mimic NOFAILBACK failoverdomain (FAILOVERDOMAIN-failover_domain1)-->
+        <meta_attributes id="SERVICE-mm-META-ATTRS-nofailback">
+          <rule id="SERVICE-mm-META-RULE-stickiness" score="INFINITY" boolean-op="or">
+            <expression id="STICKINESS-SERVICE-mm-rhel6-node1" attribute="#uname" operation="eq" value="rhel6-node1"/>
+            <expression id="STICKINESS-SERVICE-mm-rhel6-node2" attribute="#uname" operation="eq" value="rhel6-node2"/>
+          </rule>
+        </meta_attributes>
+      </group>
+    </resources>
+    <constraints>
+      <rsc_location id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP" rsc="SERVICE-mm-GROUP">
+        <!-- mimic failoverdomain (failover_domain1) for SERVICE-mm -->
+        <rule id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node1" score="INFINITY">
+          <expression id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node1-expr" attribute="#uname" operation="eq" value="rhel6-node1"/>
+        </rule>
+        <rule id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node2" score="INFINITY">
+          <expression id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node2-expr" attribute="#uname" operation="eq" value="rhel6-node2"/>
+        </rule>
+        <!-- mimic RESTRICTED failoverdomain (failover_domain1) for SERVICE-mm -->
+        <rule id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-RESTRICTED" boolean-op="and" score="-INFINITY">
+          <expression id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-RESTRICTED-rhel6-node1-expr" attribute="#uname" operation="ne" value="rhel6-node1"/>
+          <expression id="CONSTRAINT-LOCATION-SERVICE-mm-GROUP-RESTRICTED-rhel6-node2-expr" attribute="#uname" operation="ne" value="rhel6-node2"/>
+        </rule>
+      </rsc_location>
+    </constraints>
+  </configuration>
+  <status/>
+</cib>
+EOF
+    { diff -u -- - "${testcoro}" \
+      && echo "TEST: coro diff OK" \
+      || { echo "TEST: coro diff FAIL"; ret=22; }; }<<EOF
+nodelist {
+	node {
+		nodeid: 1
+		ring0_addr: rhel6-node1
+	}
+	node {
+		nodeid: 2
+		ring0_addr: rhel6-node2
+	}
+}
+quorum {
+	provider: corosync_votequorum
+}
+logging {
+	debug: on
+}
+totem {
+	cluster_name: one
+	consensus: 12000
+	join: 60
+	token: 10000
+	version: 2
+}
+EOF
+    rm -f -- "${testcib}" "${testcoro}"
+    unset testcib testcoro
+    return ${ret}
+}
+
+[ "${1}" = "__norun__" ] || run_check "$@"
