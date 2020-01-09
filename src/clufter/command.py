@@ -26,7 +26,6 @@ from .plugin_registry import PluginRegistry
 from .protocol import protodictval
 from .utils import any2iter, \
                    areinstancesupto, \
-                   arg2wrapped, \
                    args2tuple, \
                    filterdict_keep, \
                    head_tail, \
@@ -152,16 +151,27 @@ class Command(object):
 
         assert tuplist(filter_chain) and filter_chain
         # PASSDOWN or FILTERS
+        passed_filter_length = len(filter_chain)
         pass_through, filter_chain = head_tail(*filter_chain) \
                                      if len(filter_chain) > 1 \
-                                     and( not isinstance(filter_chain[0], tuple) \
+                                     and (not isinstance(filter_chain[0], tuple) \
                                      or len(filter_chain[0]) < 2) \
                                      else (None, filter_chain)
-        for i in filter_chain:
-            if not i:
+        # the condition handles differences between:
+        #    ('A',
+        #        ('B'),
+        #        ('C'))
+        # and
+        #    ('A',
+        #        ('B',
+        #            ('C')))
+        # XXX: regardless if isinstance(filter_chain[1], tuple)
+        if len(filter_chain) >= passed_filter_length + int(new):
+            filter_chain = (filter_chain, )
+        for i_origin in filter_chain:
+            if not i_origin:
                 continue
-            i_origin = arg2wrapped(i)
-            i, i_tail = head_tail(*i_origin)
+            i, i_tail = head_tail(i_origin)
             # bt denotes filters feeding this one
             bt = filter_backtrack.setdefault(i, OrderedDict())
             if new or not (bt or i_tail):  # preorder
@@ -201,21 +211,13 @@ class Command(object):
                 # preparing a new list here for callee to fill) so it can
                 # move it to the right position afterwards
                 analysis_acc['terminal_chain'].append([])  # not terminal_chain
-                # the second part of the condition handles differences between:
-                #    ('A',
-                #        ('B'),
-                #        ('C'))
-                # and
-                #    ('A',
-                #        ('B',
-                #            ('C')))
-                # XXX: whole function still quite kludgy
-                if new and len(i_origin) > 2:
-                    me((i, ) + i_tail, analysis_acc)
-                else:
-                    me((i, ) + ((head_tail(*i_tail), ), ), analysis_acc)
+                # see "the condition handles differences between" comment
+                me(i_origin, analysis_acc)
                 # postorder
-                terminal_chain.append(analysis_acc['terminal_chain'].pop())
+                ret = analysis_acc['terminal_chain'].pop()
+                if ret:
+                    # not a another use of already used (merging) filter
+                    terminal_chain.append(ret)
             elif new:
                 # yes, terminal UPFILTER is tracked twice as terminal (I/O)
                 terminal_chain.append(i)
@@ -508,25 +510,24 @@ class Command(object):
         """Proceed the command"""
         ec = EC.EXIT_SUCCESS
         maxl = len(sorted(self._filters, key=len)[-1])
+        color = dict(auto=None, never=False, always=True)[
+            getattr(opts, 'color', 'auto')
+        ]
         cmd_ctxt = cmd_ctxt or CommandContext({
             'filter_chain_analysis': self.filter_chain_analysis,
             'filter_noop':           getattr(opts, 'noop', ()),
             'filter_dump':           getattr(opts, 'dump', ()),
             'system':                getattr(opts, 'sys', ''),
-            'system_extra':          getattr(opts, 'dist', '').split(','),
+            'system_extra':          filter(len, getattr(opts, 'dist', '')
+                                                 .split(',')),
             'svc_output':            FancyOutput(f=stderr,
                                                  quiet=getattr(opts, 'quiet',
                                                                False),
                                                  prefix=("|header:[{{0:{0}}}]| "
                                                          .format(maxl)),
-                                                 color=dict(auto=None,
-                                                            never=False,
-                                                            always=True)[
-                                                                getattr(opts,
-                                                                        'color',
-                                                                        'auto')
-                                                            ]
+                                                 color=color,
                                      ),
+            'color':                color,
         }, bypass=True)
         cmd_ctxt.ensure_filters(self._filters.itervalues())
         kwargs = {}

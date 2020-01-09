@@ -443,12 +443,9 @@ cib2pcscmd = ('''\
             </xsl:for-each>
         </xsl:if>
         <!-- meta attrs -->
-        <xsl:if test="meta_attributes/nvpair">
-            <xsl:value-of select="' meta'"/>
 ''' + (
-            attrset_xsl("meta_attributes")
+        attrset_xsl("meta_attributes", cmd='" meta"')
 ) + '''
-        </xsl:if>
         <xsl:value-of select="'%(NL)s'"/>
 ''' + (
         verbose_ec_test
@@ -514,37 +511,30 @@ cib2pcscmd = ('''\
             </xsl:for-each>
         </xsl:if>
         <!-- meta attrs -->
-        <xsl:if test="meta_attributes/nvpair">
-            <xsl:value-of select="' meta'"/>
 ''' + (
-            attrset_xsl("meta_attributes")
+        attrset_xsl("meta_attributes", cmd='" meta"')
 ) + '''
-        </xsl:if>
         <!-- NOTE clone/master resource specifics handled separately later -->
         <xsl:value-of select="'%(NL)s'"/>
 ''' + (
         verbose_ec_test
 ) + '''
 
-        <!-- XXX "pcs resource utilization" not supported with majority
-                 of pcs versions -->
-        <xsl:if test="utilization/nvpair">
+        <!-- "pcs resource utilization" only supported with certain newer
+             versions of pcs -->
+        <xsl:choose>
+            <xsl:when test="$pcscmd_extra_utilization">
 ''' + (
-            verbose_inform('"set utilization for resource: ", @id')
+            attrset_xsl("utilization",
+                        cmd='$pcscmd_pcs, "resource utilization ", @id',
+                        inform='"set utilization for resource: ", @id')
 ) + '''
-            <xsl:value-of select="concat($pcscmd_pcs, 'resource utilization -h',
-                                         ' &gt;/dev/null',
-                                         ' &amp;&amp; ',
-                                         $pcscmd_pcs, 'resource utilization',
-                                         ' ', @id)"/>
-''' + (
-                attrset_xsl("utilization")
-) + '''
-            <xsl:value-of select="'%(NL)s'"/>
-''' + (
-            verbose_ec_test
-) + '''
-        </xsl:if>
+            </xsl:when>
+            <xsl:when test="utilization/nvpair">
+                <xsl:message>%(utilization_msg)s</xsl:message>
+            </xsl:when>
+        </xsl:choose>
+
     </xsl:for-each>
 
     <!-- group -->
@@ -564,6 +554,8 @@ cib2pcscmd = ('''\
 
 ''') % dict(
     NL=NL,
+    utilization_msg="WARNING: target pcs version does not support utilization"
+                    " attributes, hence omitted",
 )
 
 ###

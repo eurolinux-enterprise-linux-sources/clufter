@@ -110,8 +110,8 @@ class Filter(object):
         # XXX should rather be implemented by CompositeFormat itself?
         composite_onthefly = \
             lambda protocol, *args, **kwargs: \
-                CompositeFormat(protocol, *args,**dict(kwargs.iteritems(),
-                                                       **{'formats': formats}))
+                CompositeFormat(protocol, *args, **dict(kwargs.iteritems(),
+                                                        **{'formats': formats}))
         # XXX currently instantiation only (no match for composite classes)
         composite_onthefly.as_instance = \
             lambda *decl_or_instance, **kwargs: \
@@ -1020,6 +1020,7 @@ class XMLFilter(Filter, MetaPlugin):
         kwargs = filterdict_keep(ctxt,
             'profile', 'raw', 'system', 'system_extra',  # <- proceed_xslt
             'editor', 'interactive', 'validator_specs',  # <- atom_hook
+            'root_dir', 'walk_transform', 'xml_root',    # <- generic `proceed`
             **kwargs
         )
         kwargs['svc_output'] = ctxt.ctxt_svc_output

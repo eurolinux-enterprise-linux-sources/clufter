@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -252,6 +252,13 @@ ccs2needlexml = lazystring(lambda: ('''\
         -->
         <quorum provider="corosync_votequorum">
             <clufter:descent at="cman"/>
+            <!-- XXX following is expected to yield effect once:
+                 1. "disk" model for corosync's qdevice is implemented
+                 2. ccs2needlexml symbol under quorumd implements
+                    the conversion if any such straightforward mapping
+                    exists
+                 NOTE: quorumd/@votes -> quorum.device.votes -->
+            <clufter:descent at="quorumd"/>
             <!-- xsl:if test="cman/@expected_votes
                           and
                           quorumd/@votes">
@@ -316,7 +323,7 @@ try:
 except ValueError:
     from ... import package_name, version
     from ...utils_xslt import xslt_id_friendly
-ccsflat2cibprelude_self_id = "{0} {1}".format(package_name(), version)
+ccsflat2cibprelude_self_id = ' '.join((package_name(), version))
 
 # should roughly match the output of:
 # (exec 3>&1; exec >/dev/null; export CIB_shadow=test-shadow;

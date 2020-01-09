@@ -5,9 +5,9 @@
 """cib2pcscmd filter"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
+from ..facts import infer
 from ..filter import XMLFilter
 from ..filters._2pcscmd import verbose_ec_test, verbose_inform
-from ..utils_xml import squote
 from ..utils_xslt import NL, xslt_params
 
 
@@ -39,7 +39,7 @@ def attrset_xsl(attrset, cmd=None, inform=None):
                 </xsl:for-each>
 ''' + (
                 ('''<xsl:value-of select="'{NL}'"/>''' + '\n'
-                 + verbose_ec_test) if cmd else ''
+                 + verbose_ec_test) if cmd and inform else ''
 ) + '''
             </xsl:otherwise>
         </xsl:choose>
@@ -66,10 +66,20 @@ def cib2pcscmd(flt_ctxt, in_obj):
             def_first=xslt_params(
                 pcscmd_force=flt_ctxt['pcscmd_force'],
                 pcscmd_verbose=flt_ctxt['pcscmd_verbose'],
-                pcscmd_tmpcib=squote(flt_ctxt['pcscmd_tmpcib']),
+                pcscmd_tmpcib=flt_ctxt['pcscmd_tmpcib'],
                 pcscmd_dryrun=dry_run,
-                pcscmd_pcs=squote("pcs -f {0} ".format(tmp_cib)
-                                  if tmp_cib else "pcs "),
+                pcscmd_pcs="pcs -f {0} ".format(tmp_cib) if tmp_cib else "pcs ",
+
+                pcscmd_extra_utilization = bool(infer(
+                    'comp:pcs[utilization]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_alerts = bool(infer(
+                    'comp:pacemaker[alerts] + comp:pcs[alerts]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
             ),
         ),
     )

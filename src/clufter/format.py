@@ -191,7 +191,8 @@ class Format(object):
         """Format constructor, i.e., object = concrete internal data"""
         rs = {}
         self._representations, self._representations_ro = rs, ProtectedDict(rs)
-        self._hash = None
+        if not hasattr(self, '_hash'):  # can be defined at the class level
+            self._hash = None
         validator_specs = kwargs.pop('validator_specs', {})
         default = validator_specs.setdefault('', None)  # None ~ don't track
         validators = {}
@@ -266,6 +267,12 @@ class Format(object):
                                                  **dict(kwargs, spec=spec))
 
     @property
+    def hash(self):
+        if self._hash is None:
+            raise NotImplementedError
+        return self._hash
+
+    @property
     def representations(self):
         """Mapping of `protocol: initializing_data`"""
         # XXX should be ProtectedDict
@@ -331,6 +338,17 @@ class Format(object):
                 deco_args._validator = validator
             return deco_args
         return deco_meth
+
+
+class Nothing(Format):
+    """Empty format, typically an input for "generator" type of filters"""
+    native_protocol = VOID = Protocol('void')
+
+    _hash = hash(None)
+
+    @Format.producing(VOID)
+    def get_void(self, *protodecl):
+        pass  # same as return None
 
 
 class SimpleFormat(Format):

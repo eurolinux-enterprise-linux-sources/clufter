@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Shell completion formatters"""
@@ -82,7 +82,7 @@ class BashCompletion(Completion):
     def scripts_prologue():
         return """\
 # bash completion start
-# add me to ~/.profile persistently or eval on-the-fly in bash"""
+# add me to ~/.profile persistently or eval (enquoted!) on-the-fly in bash"""
 
     def handle_script(self, cmd):
         clsname = cmd.__class__.__name__
@@ -93,7 +93,12 @@ local opts="{0}"
 
 [[ "$1" =~ -.* ]] && compgen -W "${{opts}}" -- $1"""\
         .format(
-            ' '.join(reduce(lambda a, b: a + list(b[0]), opts, []))
+            '\n'.join(reduce(lambda a, b:
+                             a + [' '.join(i + j for i in b[0] for j in (('', '=')
+                                 if b[1].get('action', 'store')
+                                     in ('callback', 'store')
+                                 else ('', )
+                             ))], opts, []))
         ).splitlines()
 
         handle = cli_undecor(handle)
@@ -102,7 +107,12 @@ local opts="{0}"
     def scripts_epilogue(self, handles, aliases):
         handle = self._namespaced_identifier(self._name)
         opts_common, opts_main, opts_nonmain = tuple(
-            ' '.join(reduce(lambda a, b: a + list(b[0]), o, []))
+            '\n'.join(reduce(lambda a, b:
+                             a + [' '.join(i + j for i in b[0] for j in (('', '=')
+                                 if b[1].get('action', 'store')
+                                     in ('callback', 'store')
+                                 else ('', )
+                             ))], o, []))
             for o in (self._opts_common, self._opts_main, self._opts_nonmain)
         )
         alias_case = '    ' + '\n    '.join(
@@ -119,7 +129,7 @@ local cur fnc i=${{COMP_CWORD}}
 while true; do
     test ${{i}} -eq 0 && break || let i-=1
     cur=${{COMP_WORDS[${{i}}]}}
-    [[ "${{cur}}" =~ ^-.* ]] && continue
+    [[ "${{cur}}" =~ ^[-=].* ]] && continue
     # handle aliases
     case ${{cur}} in
 {5}
@@ -137,7 +147,7 @@ case "$2" in
 -*) COMPREPLY=( $(compgen -W "${{opts_common}} ${{opts_main}}" -- $2) );;
 *)  COMPREPLY=( $(compgen -W "${{commands}}" -- $2) );;
 esac""" .format(
-            self._name, ' '.join(a for a, _ in (aliases + handles)),
+            self._name, '\n'.join(a for a, _ in (aliases + handles)),
             opts_common, opts_main, opts_nonmain, alias_case
         ).splitlines()
         epilogue = "complete -o default -F {0} {1}".format(handle, self._prog)

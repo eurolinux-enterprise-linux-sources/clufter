@@ -1,5 +1,5 @@
 Name:           clufter
-Version:        0.56.2
+Version:        0.59.8
 Release:        1%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
@@ -11,6 +11,8 @@ BuildRequires:  python-setuptools
 BuildRequires:  python-lxml
 # following for nosetests
 BuildRequires:  python-nose
+# following to ensure "which bash" (and, in extension, "which sh") works
+BuildRequires:  bash which
 # following for UpdateTimestamps sanitization function
 #BuildRequires:  diffstat
 
@@ -130,10 +132,14 @@ formats and filters.
                       --ccs-flatten='%{_libexecdir}/%{name}-%{version}/ccs_flatten' \
                       --editor='%{_bindir}/nano' \
                       --ra-metadata-dir='%{_datadir}/cluster' \
-                      --ra-metadata-ext='metadata'
+                      --ra-metadata-ext='metadata' \
+                      --shell-posix='%(which sh)' \
+                      --shell-bashlike='%(which bash)'
 %{__python} setup.py saveopts -f setup.cfg pkg_prepare \
 --report-bugs='https://bugzilla.redhat.com/enter_bug.cgi?product=Red%20Hat%20Enterprise%20Linux%206&component=clufter'
-
+# make Python interpreter executation sane (via -Es flags)
+%{__python} setup.py saveopts -f setup.cfg build_scripts \
+                     --executable='%{__python} -Es'
 %build
 %{__python} setup.py build
 ./run-dev --skip-ext --completion-bash 2>/dev/null \
@@ -186,6 +192,10 @@ done < .subcmds
 %{__python} setup.py install --skip-build --root '%{buildroot}'
 # following is needed due to umask 022 not taking effect(?) leading to 775
 %{__chmod} -- g-w '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten'
+# fix excessive script interpreting "executable" quoting with old setuptools:
+# https://github.com/pypa/setuptools/issues/188
+# https://bugzilla.redhat.com/1353934
+sed -i '1s|^\(#!\)"\(.*\)"$|\1\2|' '%{buildroot}%{_bindir}/%{name}'
 # %%{_bindir}/%%{name} should have been created
 test -f '%{buildroot}%{_bindir}/%{name}' \
   || %{__install} -D -pm 644 -- '%{buildroot}%{_bindir}/%{name}' \
@@ -289,6 +299,19 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{python_sitelib}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Wed Jan 18 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.8-1
+- bump upstream package, see
+  https://github.com/jnpkrn/clufter/releases/tag/v0.59.8
+
+* Mon Dec 12 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.7-1
+- bump upstream package, see
+  https://github.com/jnpkrn/clufter/releases/tag/v0.59.7
+
+* Thu Oct 20 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.6-1
+- bump upstream package, see https://pagure.io/clufter/releases
+  (v0.56.3, v0.57.0, v0.58.0, v0.59.0 ... v0.59.6)
+- make Python interpreter execution sane
+
 * Fri Mar 18 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.56.2-1
 - move entry_points.txt to clufter-cli sub-package
 - bump upstream package, see

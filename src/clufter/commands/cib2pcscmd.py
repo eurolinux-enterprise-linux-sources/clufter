@@ -6,14 +6,21 @@
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from ..command import Command
+from ..defaults import SHELL_POSIX
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cib import PATH_CIB
-from ._chains_pcs import cib2pcscmd_chain, cib2pcscmd_output
+from ._chains_pcs import cib2pcscmd_chain_exec, cib2pcscmd_output
+
+from os import isatty
 
 
-@Command.deco((cib2pcscmd_chain,
-                  ('cmd-wrap')))
+@Command.deco(('cmd-annotate',
+                  ('stringiter-combine2',
+                      ('cmd-wrap'))),
+              (cib2pcscmd_chain_exec(
+                  ('stringiter-combine2'  # , ('cmd-wrap' ...
+                   ))))
 def cib2pcscmd(cmd_ctxt,
                input=PATH_CIB,
                output="-",
@@ -45,14 +52,30 @@ def cib2pcscmd(cmd_ctxt,
     cmd_ctxt['pcscmd_dryrun'] = dry_run
     cmd_ctxt['pcscmd_enable'] = enable
     cmd_ctxt['text_width'] = text_width
+
+    cmd_ctxt['annotate_shell'] = SHELL_POSIX
     # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
         (
-            cib2pcscmd_output(
-                file_proto(output),
+            void_proto(),
+            (
+                    (
+                        file_proto(output),
+                    ),
             ),
+            file_proto(input),
+            # already tracked
+            #cib2pcscmd_output(
+            #        (
+            #            file_proto(output),
+            #        ),
+            #),
         ),
     )

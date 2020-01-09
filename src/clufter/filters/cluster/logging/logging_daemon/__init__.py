@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 
@@ -28,12 +28,26 @@ ccs2needlexml_subsys = {
     'CONFDB': 'CMAP',
     'CPG':    True,
     'PLOAD':  True,
+    'QDISKD': 'QDEVICE',  # see ccs2needlexml_attrs_exclude
+    'QUORUM': True,
     'SERV':   True,
     'SYNC':   False,
     'SYNCV2': 'SYNC',
     'VOTEQ':  True,
     'YKD':    True,
 }
+
+# post-conversion mapping: <new subsys> X <parameters from old subsys to drop>
+ccs2needlexml_attrs_exclude = {
+    'QDEVICE': ('logfile', 'logfile_priority', 'to_logfile'),
+}
+
+# ...converted to pre-conversion mapping using xslt_is_member-friendly format
+ccs2needlexml_attrs_exclude_ = dict(
+    (kk, '|'.join(('', ) + v + ('', )))
+        for (k, v) in ccs2needlexml_attrs_exclude.iteritems()
+            for (kk, vv) in ccs2needlexml_subsys.iteritems() if vv == k
+)
 
 ccs2needlexml = '''\
     <xsl:if test="@name='corosync'
@@ -43,6 +57,16 @@ ccs2needlexml = '''\
                   xslt_is_member('.', ccs2needlexml_subsys)
 ) + '''
                   ]">
+        <xsl:variable name="Subsystem">
+            <xsl:value-of select="@subsys"/>
+        </xsl:variable>
+        <xsl:variable name="ExcludeParamsMask">
+            <xsl:choose>
+''' + (
+            xslt_string_mapping(ccs2needlexml_attrs_exclude_, '$Subsystem')
+) + '''
+            </xsl:choose>
+        </xsl:variable>
         <logger_subsys>
             <xsl:for-each select="@*[
 ''' + (
@@ -50,6 +74,16 @@ ccs2needlexml = '''\
 ) + '''
                                  ]">
                 <xsl:choose>
+                    <xsl:when test="contains($ExcludeParamsMask,
+                                             concat('|', name(), '|'))">
+                        <xsl:message>
+                            <xsl:value-of select='concat("NOTE: Parameter `",
+                                                         name(), "` from original",
+                                                         " corosync&apos;s logging",
+                                                         " subsystem `", $Subsystem,
+                                                         "` intentionally omitted")'/>
+                        </xsl:message>
+                    </xsl:when>
                     <xsl:when test="name() != 'subsys'
                                     or
 ''' + (
@@ -65,8 +99,8 @@ ccs2needlexml = '''\
 ) + '''">
                         <xsl:attribute name="{name()}">
                         <xsl:message>
-                            <xsl:value-of select="concat('Logging subsystem',
-                                                         ., ' originally had',
+                            <xsl:value-of select="concat('NOTE: Logging subsystem `',
+                                                         ., '` originally had',
                                                          ' a different meaning',
                                                          ' but kept as is')"/>
                         </xsl:message>

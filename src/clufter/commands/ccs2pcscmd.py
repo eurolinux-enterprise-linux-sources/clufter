@@ -6,23 +6,29 @@
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from ..command import Command, CommandAlias
+from ..defaults import SHELL_BASHLIKE, SHELL_POSIX
 from ..facts import cluster_pcs_flatiron
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cman import PATH_CLUSTERCONF
-from ._chains_pcs import ccsflat2pcscmd_chain, ccsflat2pcscmd_output
+from ._chains_pcs import ccsflat2pcscmd_chain_exec
+
+from os import isatty
 
 
-@Command.deco(('ccs2ccsflat',
+@Command.deco(('cmd-annotate',
+                                  ('stringiter-combine3',
+                                      ('cmd-wrap'))),
+              ('ccs2ccsflat',
                   ('ccs-disable-rg',
                       ('ccs2ccs-pcmk',
                           ('ccs-version-bump',
                               ('ccspcmk2pcscmd',
-                                  ('stringiter-combine2',
-                                       ('cmd-wrap')))))),
-                  (ccsflat2pcscmd_chain,
-                                  ('stringiter-combine2'  # , ('cmd-wrap' ...
-                                   ))))
+                                  ('stringiter-combine3'  # , ('cmd-wrap' ...
+                                   ))))),
+                  (ccsflat2pcscmd_chain_exec(
+                                  ('stringiter-combine3'  # , ('cmd-wrap' ...
+                                   )))))
 def ccs2pcscmd_flatiron(cmd_ctxt,
                         input=PATH_CLUSTERCONF,
                         output="-",
@@ -60,43 +66,66 @@ def ccs2pcscmd_flatiron(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+
+    # possible use of process substitution (https://bugzilla.redhat.com/1381531)
+    cmd_ctxt['annotate_shell'] = (SHELL_POSIX if dry_run or noguidance
+                                  else SHELL_BASHLIKE)
     # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
         (
+            void_proto(),
             (
-                (
-                    (
-                        (
-                            (
-                                file_proto(output),
-                            ),
-                        ),
-                    ),
-                ),
+                                                (
+                                                    file_proto(output),
+                                                ),
             ),
-            #ccsflat2cibfinal_output(
+            file_proto(input),
+            # already tracked
+            #(
+            #    (
+            #        (
             #            (
             #                (
-            #                    file_proto(output),  # already tracked
+            #                                    (
+            #                                        file_proto(output),
+            #                                    ),
             #                ),
             #            ),
+            #        ),
+            #    ),
+            #    # already tracked
+            #    #ccsflat2pcscmd_output(
+            #    #                                (
+            #    #                                    file_proto(output),
+            #    #                                ),
+            #    #),
             #),
         ),
     )
 
 
-@Command.deco(('ccs2ccsflat',
+@Command.deco(('cmd-annotate',
+                              ('stringiter-combine4',
+                                  ('cmd-wrap'))),
+              ('ccs2ccsflat',
                   ('ccs-propagate-cman',
                       ('ccs2needlexml',
                           ('needlexml2pcscmd',
-                              ('stringiter-combine2',
-                                   ('cmd-wrap'))))),
-                  (ccsflat2pcscmd_chain,
-                              ('stringiter-combine2'  # , ('cmd-wrap' ...
-                               ))))
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )),
+                          ('needleqdevicexml2pcscmd',
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )))),
+                  (ccsflat2pcscmd_chain_exec(
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )))))
 def ccs2pcscmd_needle(cmd_ctxt,
                       input=PATH_CLUSTERCONF,
                       output="-",
@@ -134,27 +163,49 @@ def ccs2pcscmd_needle(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+
+    # possible use of process substitution (https://bugzilla.redhat.com/1381531)
+    cmd_ctxt['annotate_shell'] = (SHELL_POSIX if dry_run or noguidance
+                                  else SHELL_BASHLIKE)
     # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
         (
+            void_proto(),
             (
-                (
-                    (
-                        (
-                            file_proto(output),
-                        ),
-                    ),
-                ),
+                                                (
+                                                    file_proto(output),
+                                                ),
             ),
-            #ccsflat2cibfinal_output(
+            file_proto(input),
+            #(
+            #    (
             #        (
-            #            (
-            #                file_proto(output),  # already tracked
-            #            ),
+            #                                (
+            #                                    (
+            #                                        file_proto(output),
+            #                                    ),
+            #                                ),
+            #            # already tracked
+            #            #                    (
+            #            #                        (
+            #            #                            file_proto(output),
+            #            #                        ),
+            #            #                    ),
             #        ),
+            #    ),
+            #    # already tracked
+            #    #ccsflat2pcscmd_output(
+            #    #                                (
+            #    #                                    file_proto(output),
+            #    #                                ),
+            #    #),
             #),
         ),
     )

@@ -1,11 +1,11 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from ....filters._2pcscmd import verbose_ec_test, verbose_inform
-from ....utils_xslt import NL, xslt_is_member
+from ....utils_xslt import NL, translate_lower, xslt_is_member
 
 cib2pcscmd_datespec = (
     'hours',
@@ -27,6 +27,8 @@ cib2pcscmd = ('''\
                 <xsl:choose>
                     <xsl:when test="@score = 'INFINITY'
                                     or
+                                    @score = '+INFINITY'
+                                    or
                                     @score &gt;= 0">
                         <xsl:value-of select="'prefers'"/>
                     </xsl:when>
@@ -38,7 +40,7 @@ cib2pcscmd = ('''\
             <xsl:value-of select="concat($pcscmd_pcs, 'constraint location',
                                         ' ', @rsc,
                                         ' ', $Relationship, ' ', @node)"/>
-            <xsl:if test="@score != 'INFINITY'">
+            <xsl:if test="not(contains(@score, 'INFINITY'))">
                 <xsl:value-of select="concat('=', @score)"/>
             </xsl:if>
             <xsl:value-of select="'%(NL)s'"/>
@@ -48,7 +50,6 @@ cib2pcscmd = ('''\
         <xsl:when test="rule">
             <xsl:variable name="Resource" select="@rsc"/>
             <xsl:variable name="ConstraintId" select="@id"/>
-            <xsl:variable name="BooleanOp" select="@boolean-op"/>
             <xsl:for-each select="rule[@id-ref]">
                 <!-- XXX: could eventually be unfolded in-place if found -->
                 <xsl:message
@@ -58,6 +59,7 @@ cib2pcscmd = ('''\
 ''' + (
                 verbose_inform('"new rule/location constraint: ", @id, "/", $ConstraintId')
 ) + '''
+                <xsl:variable name="BooleanOp" select="@boolean-op"/>
                 <xsl:choose>
                     <xsl:when test="position() = 1">
                         <xsl:value-of select="concat(
@@ -80,19 +82,20 @@ cib2pcscmd = ('''\
                 </xsl:choose>
                 <xsl:if test="
 ''' + (
-                xslt_is_member('@role', ('master', 'slave'))
+                xslt_is_member(translate_lower('@role'),
+                               ('master', 'slave'))
 ) + '''">
-                    <xsl:value-of select="concat(' ', 'role=', @role)"/>
+                    <xsl:value-of select="concat(' ',
+''' + (
+                        translate_lower('@role')
+) + ''')"/>
                 </xsl:if>
-                <xsl:choose>
-                    <xsl:when test="@score">
-                        <xsl:value-of select="concat(' score=', @score)"/>
-                    </xsl:when>
-                    <xsl:when test="@score-attribute">
-                        <xsl:value-of select="concat(' score-attribute=',
-                                                    @score-attribute)"/>
-                    </xsl:when>
-                </xsl:choose>
+                <xsl:for-each select="@*[
+''' + (
+                    xslt_is_member('name()', ('score', 'score-attribute'))
+) + ''']">
+                    <xsl:value-of select="concat(' ', name(), '=', .)"/>
+                </xsl:for-each>
 
                 <xsl:if test="rule">
                     <xsl:message
@@ -101,7 +104,7 @@ cib2pcscmd = ('''\
 
                 <xsl:for-each select="descendant::expression|descendant::date_expression">
                     <xsl:if test="count(preceding-sibling::expression|preceding-sibling::date_expression) &gt; 0">
-                        <xsl:value-of select="concat(' ', $BooleanOp, ' ')"/>
+                        <xsl:value-of select="concat(' ', $BooleanOp)"/>
                     </xsl:if>
                     <xsl:choose>
                         <xsl:when test="name() = 'expression'">

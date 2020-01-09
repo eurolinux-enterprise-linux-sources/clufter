@@ -7,36 +7,29 @@ __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 from ....filters._2pcscmd import verbose_ec_test, verbose_inform
 from ....utils_xslt import NL, xslt_is_member
 
+
 cib2pcscmd_options = (
-    'symmetrical',
-    'score',
-    'kind',
+    # ticket is required and has a special treatment
+    'loss-policy',
 )
 
 cib2pcscmd_set_options = (
-    'action',
-    'sequential',
-    'require-all',
-    # following seems not to be reflected in the schemas at all
-    #'kind',
+    'role',
 )
 
 cib2pcscmd = ('''\
     <xsl:choose>
-        <!-- plain first-then -->
-        <xsl:when test="@first and @then">
+        <!-- plain rsc -->
+        <xsl:when test="@rsc">
 ''' + (
-            verbose_inform('"new order constraint: ", @id')
+            verbose_inform('"new ticket constraint (single resource): ", @id')
 ) + '''
-            <xsl:value-of select="concat($pcscmd_pcs, 'constraint order')"/>
-            <xsl:if test="@first-action and @first-action != 'start'">
-                <xsl:value-of select="concat(' ', @first-action)"/>
+            <xsl:value-of select="concat($pcscmd_pcs, 'constraint ticket add')"/>
+            <xsl:value-of select="concat(' ', @ticket)"/>
+            <xsl:if test="@rsc-role">
+                <xsl:value-of select="concat(' ', @rsc-role)"/>
             </xsl:if>
-            <xsl:value-of select="concat(' ', @first, ' then')"/>
-            <xsl:if test="@then-action and @then-action != 'start'">
-                <xsl:value-of select="concat(' ', @then-action)"/>
-            </xsl:if>
-            <xsl:value-of select="concat(' ', @then)"/>
+            <xsl:value-of select="concat(' ', @rsc)"/>
             <xsl:for-each select="@*[
 ''' + (
                 xslt_is_member('name()', cib2pcscmd_options)
@@ -53,9 +46,9 @@ cib2pcscmd = ('''\
         <!-- resource sets -->
         <xsl:when test="resource_set">
 ''' + (
-            verbose_inform('"new order constraint (resource set): ", @id')
+            verbose_inform('"new ticket constraint (resource set): ", @id')
 ) + '''
-            <xsl:value-of select="concat($pcscmd_pcs, 'constraint order')"/>
+            <xsl:value-of select="concat($pcscmd_pcs, 'constraint ticket')"/>
 
             <xsl:for-each select="resource_set">
                 <xsl:value-of select="' set'"/>
@@ -73,6 +66,7 @@ cib2pcscmd = ('''\
             </xsl:for-each>
 
             <xsl:value-of select="' setoptions'"/>
+            <xsl:value-of select="concat(' ', 'ticket=', @ticket)"/>
             <xsl:for-each select="@*[
 ''' + (
                 xslt_is_member('name()', cib2pcscmd_options)

@@ -117,7 +117,9 @@ clufter/filters/cib_meld_templates.py
 clufter/filters/cib_revitalize.py
 clufter/filters/cibcompact2cib.py
 clufter/filters/cibprelude2cibcompact.py
+clufter/filters/cmd_annotate.py
 clufter/filters/cmd_wrap.py
+clufter/filters/needleqdevicexml2pcscmd.py
 clufter/filters/needlexml2pcscmd.py
 clufter/filters/simpleconfig2needlexml.py
 clufter/filters/simpleconfig_normalize.py
@@ -125,10 +127,13 @@ clufter/filters/stringiter_combine.py
 clufter/filters/xml2simpleconfig.py
 clufter/filters/cib/__init__.py
 clufter/filters/cib/configuration/__init__.py
+clufter/filters/cib/configuration/alerts/__init__.py
+clufter/filters/cib/configuration/alerts/alert/__init__.py
 clufter/filters/cib/configuration/constraints/__init__.py
 clufter/filters/cib/configuration/constraints/rsc_colocation/__init__.py
 clufter/filters/cib/configuration/constraints/rsc_location/__init__.py
 clufter/filters/cib/configuration/constraints/rsc_order/__init__.py
+clufter/filters/cib/configuration/constraints/rsc_ticket/__init__.py
 clufter/filters/cib/configuration/crm_config/__init__.py
 clufter/filters/cib/configuration/fencing-topology/__init__.py
 clufter/filters/cib/configuration/fencing-topology/fencing-level/__init__.py
@@ -194,6 +199,8 @@ clufter/filters/corosync/__init__.py
 clufter/filters/corosync/nodelist/__init__.py
 clufter/filters/corosync/nodelist/node/__init__.py
 clufter/filters/corosync/quorum/__init__.py
+clufter/filters/corosync/quorum/device/__init__.py
+clufter/filters/corosync/quorum/device/net/__init__.py
 clufter/filters/corosync/totem/__init__.py
 clufter/filters/corosync/totem/interface/__init__.py
 clufter/formats/__init__.py
@@ -208,6 +215,7 @@ clufter/formats/cib/pacemaker-1.2.rng
 clufter/formats/cib/pacemaker-2.0.rng
 clufter/formats/cib/pacemaker-2.3.rng
 clufter/formats/cib/pacemaker-2.4.rng
+clufter/formats/cib/pacemaker-2.5.rng
 clufter/formats/corosync/corosync.rng
 doc/cib-ids.txt
 doc/env-vars.txt

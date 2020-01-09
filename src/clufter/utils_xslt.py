@@ -1,14 +1,16 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """XSLT helpers"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
-from .utils_xml import NAMESPACES, XSL
+from .utils_xml import NAMESPACES, XSL, squote
 
 
 NL = '&#xa;'
+ALPHA_UPPER = ''.join([chr(i) for i in xrange(ord('A'), ord('Z') + 1)])
+ALPHA_LOWER = ALPHA_UPPER.lower()
 
 
 def xslt_identity(particular_selector=''):
@@ -38,7 +40,9 @@ def xslt_params(**d):
     ret = ""
     for k, v in d.iteritems():
         ret += '<xsl:param name="{0}" select="{1}"/>\n'.format(
-            k, xslt_boolean(v) if isinstance(v, bool) else v
+            k, xslt_boolean(v) if isinstance(v, bool)
+            else squote(v) if isinstance(v, basestring)
+            else v  # int and the like
         )
     return ret
 
@@ -71,3 +75,9 @@ def xslt_string_mapping(d, what="."):
         ret.append('''\
     </xsl:when>''')
     return '\n'.join(ret)
+
+
+def translate_lower(what="."):
+    """Convert textual result of XPath expression to lowercase"""
+    return ('''translate({0}, '{1}', '{2}')'''
+            .format(what, ALPHA_UPPER, ALPHA_LOWER))
