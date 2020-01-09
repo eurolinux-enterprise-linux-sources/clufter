@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Format representing merged/isolated (1/2 levels) of single command to exec"""
@@ -17,6 +17,7 @@ log = getLogger(__name__)
 from ..format import SimpleFormat
 from ..protocol import Protocol
 from ..utils import head_tail
+from ..utils_2to3 import bytes_enc, iter_items
 from ..utils_func import add_item, apply_intercalate, apply_partition
 
 # man bash | grep -A2 '\s\+metacharacter$'
@@ -74,13 +75,13 @@ class command(SimpleFormat):
         return ret
 
     @SimpleFormat.producing(BYTESTRING, chained=True)
-    def get_bytestring(self, *protodecl):
+    def get_bytestring(self, *iodecl):
         """Return command as canonical single string"""
         # chained fallback
-        return ' '.join(self.MERGED(protect_safe=True))
+        return bytes_enc(' '.join(self.MERGED(protect_safe=True)))
 
     @SimpleFormat.producing(SEPARATED, protect=True)
-    def get_separated(self, *protodecl):
+    def get_separated(self, *iodecl):
         merged = self.MERGED()
         merged.reverse()
         ret, acc, takes = [], [], 2  # by convention, option takes at most 1 arg
@@ -110,7 +111,7 @@ class command(SimpleFormat):
         return ret
 
     @SimpleFormat.producing(MERGED, protect=True)
-    def get_merged(self, *protodecl):
+    def get_merged(self, *iodecl):
         if self.BYTESTRING in self._representations:  # break the possible loop
             # XXX backticks not supported (yet)
             preprocessed = apply_partition(
@@ -178,8 +179,8 @@ class command(SimpleFormat):
                     self.__class__.name
                 ))
             ret = list(d.get('__cmd__', ()))
-            ret.extend((k, v) for k, vs in d.iteritems() for v in (vs or ((), ))
-                                  if k not in ('__cmd__', '__args__'))
+            ret.extend((k, v) for k, vs in iter_items(d) for v in (vs or ((), ))
+                                        if k not in ('__cmd__', '__args__'))
             ret.extend(d.get('__args__', ()))
         else:
             ret = self.SEPARATED(protect_safe=True)
@@ -188,7 +189,7 @@ class command(SimpleFormat):
     @SimpleFormat.producing(DICT, protect=True)
     # not a perfectly bijective mapping, this is a bit lossy representation,
     # on the other hand it canonicalizes the notation when turned to other forms
-    def get_dict(self, *protodecl):
+    def get_dict(self, *iodecl):
         separated = self.SEPARATED()
         separated.reverse()
         ret = OrderedDict()

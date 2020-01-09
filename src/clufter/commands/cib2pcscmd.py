@@ -1,17 +1,19 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """cib2pcscmd command"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from ..command import Command
+try:
+    from ..defaults import SHELL_POSIX
+except ImportError:
+    SHELL_POSIX = ''
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cib import PATH_CIB
-from ._chains_pcs import cib2pcscmd_chain_exec, cib2pcscmd_output
-
-from os import isatty
+from ._chains_pcs import cib2pcscmd_chain_exec  #, cib2pcscmd_output
 
 
 @Command.deco(('cmd-annotate',
@@ -28,7 +30,7 @@ def cib2pcscmd(cmd_ctxt,
                silent=False,
                tmp_cib="{cib2pcscmd.defs[pcscmd_tmpcib]}",
                dry_run=False,
-               enable=False,
+               set_exec=False,
                text_width='0',
                _common=XMLFilter.command_common):
     """CIB -> equivalent in pcs commands
@@ -41,7 +43,7 @@ def cib2pcscmd(cmd_ctxt,
         silent      do not track the progress along the steps execution (echoes)
         tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
-        enable      enable cluster infrastructure services (autostart on reboot)
+        set_exec    make the output file executable (not recommended)
         text_width  for commands rewrapping (0/-1/neg. ~ auto/disable/hi-limit)
     """
     cmd_ctxt['pcscmd_force'] = force
@@ -49,17 +51,14 @@ def cib2pcscmd(cmd_ctxt,
     cmd_ctxt['pcscmd_verbose'] = not(silent)
     cmd_ctxt['pcscmd_tmpcib'] = tmp_cib
     cmd_ctxt['pcscmd_dryrun'] = dry_run
-    cmd_ctxt['pcscmd_enable'] = enable
     cmd_ctxt['text_width'] = text_width
-    # XXX possibility to disable cib-meld-templates
 
-    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
-                                           cmd_ctxt['color'] is not False \
-                                           or cmd_ctxt['color']
+    cmd_ctxt['annotate_shell'] = SHELL_POSIX
+    # XXX possibility to disable cib-meld-templates
 
     void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
-    return (
+    yield (
         (
             void_proto(),
             (
@@ -67,6 +66,7 @@ def cib2pcscmd(cmd_ctxt,
                         file_proto(output),
                     ),
             ),
+        ), (
             file_proto(input),
             # already tracked
             #cib2pcscmd_output(
@@ -76,3 +76,6 @@ def cib2pcscmd(cmd_ctxt,
             #),
         ),
     )
+    # post-processing (make resulting file optionally executable)
+    if set_exec:
+        output_set_exec(cmd_ctxt, 'cmd-wrap')

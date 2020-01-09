@@ -1,6 +1,11 @@
+# virtual provides:
+#   clufter         -> clufter-cli
+#   clufter-lib     -> python.+-clufter (any if multiple)
+#   python2-clufter -> python-clufter
+
 Name:           clufter
-Version:        0.59.5
-Release:        2%{?dist}
+Version:        0.76.0
+Release:        1%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
 License:        GPLv2+
@@ -9,21 +14,35 @@ URL:            https://pagure.io/%{name}
 # required for autosetup macro
 BuildRequires:  git
 
+# Python 2 related
 BuildRequires:  python2-devel
 BuildRequires:  python-setuptools
 BuildRequires:  python-lxml
 
-%global test_version 0.59.1
+# following to ensure "which bash" (and, in extension, "which sh") works
+BuildRequires:  bash which
+
+BuildRequires:  pkgconfig(libxml-2.0)
+# needed for schemadir path pointer
+BuildRequires:  pkgconfig(pacemaker)
+# needed for schemas themselves
+BuildRequires:  pacemaker
+# needed to squash multi-file schemas to single file
+BuildRequires:  jing
+# needed for xsltproc and xmllint respectively
+BuildRequires:  libxslt libxml2
+
+#global test_version
 %global testver      %{?test_version}%{?!test_version:%{version}}
 
 Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{version}.tar.gz
 Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
-Source2:        https://pagure.io/clufter/raw/v${version}/f/misc/fix-jing-simplified-rng.xsl
-Patch0:         main-make-the-help-screen-more-help2html-friendly.patch
+Source2:        https://pagure.io/%{name}/raw/v%{version}/f/misc/fix-jing-simplified-rng.xsl
+Source3:        https://pagure.io/%{name}/raw/v%{version}/f/misc/pacemaker-borrow-schemas
 
 # for pacemaker BuildRequires dependency
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 s390x
+ExclusiveArch: i686 x86_64 ppc64le s390x
 %endif
 
 %description
@@ -34,6 +53,7 @@ framework (capable of XSLT) offers also other uses through its plugin library.
 %package cli
 Group:          System Environment/Base
 Summary:        Tool for transforming/analyzing cluster configuration formats
+Provides:       %{name} = %{version}-%{release}
 
 BuildRequires:  bash-completion
 
@@ -42,7 +62,7 @@ BuildRequires:  help2man
 # following for pkg_resources module
 Requires:       python-setuptools
 Requires:       python-%{name} = %{version}-%{release}
-Provides:       %{name} = %{version}-%{release}
+Requires:       %{_bindir}/nano
 BuildArch:      noarch
 
 %description cli
@@ -57,20 +77,12 @@ library (packaged as python-%{name}).
 Group:          System Environment/Libraries
 Summary:        Library for transforming/analyzing cluster configuration formats
 License:        GPLv2+ and GFDL
+Provides:       %{name}-lib = %{version}-%{release}
+Provides:       python2-%{name} = %{version}-%{release}
 
-BuildRequires:  pkgconfig(libxml-2.0)
-
-# needed for schemadir path pointer
-BuildRequires:  pkgconfig(pacemaker)
-# needed for schemas themselves
-BuildRequires:  pacemaker
-# needed to squash multi-file schemas to single file
-BuildRequires:  jing
-# needed for xsltproc and xmllint respectively
-BuildRequires:  libxslt libxml2
-
+Requires:       %{name}-bin = %{version}-%{release}
 Requires:       python-lxml
-Requires:       %{_bindir}/nano
+BuildArch:      noarch
 
 %description -n python-%{name}
 While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
@@ -79,10 +91,37 @@ framework (capable of XSLT) offers also other uses through its plugin library.
 
 This package contains %{name} library including built-in plugins.
 
+%package bin
+Group:          System Environment/Libraries
+Summary:        Common internal compiled files for %{name}
+License:        GPLv2+
+
+Requires:       %{name}-common = %{version}-%{release}
+
+%description bin
+While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
+stacks configuration conversion (as per RHEL trend), the command-filter-format
+framework (capable of XSLT) offers also other uses through its plugin library.
+
+This package contains internal, arch-specific files for %{name}.
+
+%package common
+Group:          System Environment/Libraries
+Summary:        Common internal data files for %{name}
+License:        GPLv2+
+BuildArch:      noarch
+
+%description common
+While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
+stacks configuration conversion (as per RHEL trend), the command-filter-format
+framework (capable of XSLT) offers also other uses through its plugin library.
+
+This package contains internal, arch-agnostic files for %{name}.
+
 %package lib-general
 Group:          System Environment/Libraries
 Summary:        Extra %{name} plugins usable for/as generic/auxiliary products
-Requires:       python-%{name} = %{version}-%{release}
+Requires:       %{name}-lib = %{version}-%{release}
 BuildArch:      noarch
 
 %description lib-general
@@ -94,7 +133,6 @@ reusable formats and filters.
 %package lib-ccs
 Group:          System Environment/Libraries
 Summary:        Extra plugins for transforming/analyzing CMAN configuration
-Requires:       python-%{name} = %{version}-%{release}
 Requires:       %{name}-lib-general = %{version}-%{release}
 BuildArch:      noarch
 
@@ -106,7 +144,6 @@ formats and filters.
 %package lib-pcs
 Group:          System Environment/Libraries
 Summary:        Extra plugins for transforming/analyzing Pacemaker configuration
-Requires:       python-%{name} = %{version}-%{release}
 Requires:       %{name}-lib-general = %{version}-%{release}
 BuildArch:      noarch
 
@@ -123,11 +160,14 @@ formats and filters.
 %endif
 
 ## for some esoteric reason, the line above has to be empty
-%{__python2} setup.py saveopts -f setup.cfg pkg_prepare \
-                      --ccs-flatten='%{_libexecdir}/%{name}-%{version}/ccs_flatten' \
-                      --editor='%{_bindir}/nano' \
-                      --ra-metadata-dir='%{_datadir}/cluster' \
-                      --ra-metadata-ext='metadata'
+%{__python} setup.py saveopts -f setup.cfg pkg_prepare \
+                     --ccs-flatten='%{_libexecdir}/%{name}-%{version}/ccs_flatten' \
+                     --editor='%{_bindir}/nano' \
+                     --extplugins-shared='%{_datarootdir}/%{name}/ext-plugins' \
+                     --ra-metadata-dir='%{_datadir}/cluster' \
+                     --ra-metadata-ext='metadata' \
+                     --shell-posix='%(which sh 2>/dev/null || echo /bin/SHELL-POSIX)' \
+                     --shell-bashlike='%(which bash 2>/dev/null || echo /bin/SHELL-BASHLIKE)'
 %{__python} setup.py saveopts -f setup.cfg pkg_prepare \
 --report-bugs='https://bugzilla.redhat.com/enter_bug.cgi?product=Red%20Hat%20Enterprise%20Linux%207&component=clufter'
 # make Python interpreter executation sane (via -Es flags)
@@ -136,7 +176,7 @@ formats and filters.
 
 %build
 %{__python2} setup.py build
-./run-dev --skip-ext --completion-bash 2>/dev/null \
+%{__python} ./run-dev --skip-ext --completion-bash 2>/dev/null \
   | sed 's|run[-_]dev|%{name}|g' > .bashcomp
 # generate man pages (proper commands and aliases from a sorted sequence)
 %{__mkdir_p} -- .manpages/man1
@@ -180,30 +220,7 @@ while read cmd; do
   > ".manpages/man1/%{name}-${cmd}.1"
 done < .subcmds
 
-schemadir=$(pkg-config --variable schemadir pacemaker)
-%{__mkdir_p} -- .schemas
-for f in "${schemadir}"/pacemaker-*.*.rng; do
-    test -f "${f}" || continue
-    base="$(basename "${f}")"
-    case "${base}" in
-    pacemaker-1.0.rng|pacemaker-2.[12].rng)
-        continue;;  # skip non-defaults of upstream releases (avoid clutter)
-    esac
-    sentinel=10; old=; new="${f}"
-    while [ "$(stat -c '%%s' "${old}")" != "$(stat -c '%%s' "${new}")" ]; do
-        [ "$((sentinel -= 1))" -gt 0 ] || break
-        [ "${old}" = "${f}" ] && old=".schemas/${base}";
-        [ "${new}" = "${f}" ] \
-          && { old="${f}"; new=".schemas/${base}.new"; } \
-          || %{__cp} -f "${new}" "${old}"
-        jing -is "${old}" > "${new}"
-    done
-    # xmllint drops empty lines caused by the applied transformation
-    xsltproc --stringparam filename-or-version "${base}" \
-      "%{SOURCE2}" "${new}" \
-      | xmllint --format - > "${old}"
-    %{__rm} -f -- "${new}"
-done
+OUTPUTDIR=.schemas POSTPROCESS="%{SOURCE2}" sh "%{SOURCE3}" --clobber
 
 %install
 
@@ -219,6 +236,25 @@ sed -i '1s|^\(#!\)"\(.*\)"$|\1\2|' '%{buildroot}%{_bindir}/%{name}'
 test -f '%{buildroot}%{_bindir}/%{name}' \
   || %{__install} -D -pm 644 -- '%{buildroot}%{_bindir}/%{name}' \
                                 '%{buildroot}%{_bindir}/%{name}'
+
+# move data files from python-specific locations to a single common one
+# and possibly symlink that back
+%{__mkdir_p} -- '%{buildroot}%{_datarootdir}/%{name}/formats'
+for format in cib corosync; do
+  %{__cp} -a -t '%{buildroot}%{_datarootdir}/%{name}/formats' \
+          -- "%{buildroot}%{python2_sitelib}/%{name}/formats/${format}"
+  %{__rm} -f -- "%{buildroot}%{python2_sitelib}/%{name}/formats/${format}"/*
+  ln -s -t "%{buildroot}%{python2_sitelib}/%{name}/formats/${format}" \
+     -- $(pushd "%{buildroot}%{_datarootdir}/%{name}/formats/${format}" >/dev/null; \
+          ls -1A | sed "s:.*:%{_datarootdir}/%{name}/formats/${format}/\\0:")
+done
+
+# move ext-plugins from python-specific locations to a single common one
+# incl. the different sorts of precompiled bytecodes
+%{__mkdir_p} -- '%{buildroot}%{_datarootdir}/%{name}/ext-plugins'
+mv -t '%{buildroot}%{_datarootdir}/%{name}/ext-plugins' \
+   -- '%{buildroot}%{python2_sitelib}/%{name}'/ext-plugins/*/
+
 declare bashcompdir="$(pkg-config --variable=completionsdir bash-completion \
                        || echo '%{_datadir}/bash-completion/completions')"
 declare bashcomp="${bashcompdir}/%{name}"
@@ -243,7 +279,7 @@ cat >.bashcomp-files <<-EOF
 EOF
 %{__mkdir_p} -- '%{buildroot}%{_mandir}'
 %{__cp} -a -t '%{buildroot}%{_mandir}' -- .manpages/*
-%{__cp} -a -f -t '%{buildroot}%{python2_sitelib}/%{name}/formats/cib' \
+%{__cp} -a -f -t '%{buildroot}%{_datarootdir}/%{name}/formats/cib' \
               -- .schemas/pacemaker-*.*.rng
 %{__mkdir_p} -- '%{buildroot}%{_defaultdocdir}/%{name}-%{version}'
 %{__cp} -a -t '%{buildroot}%{_defaultdocdir}/%{name}-%{version}' \
@@ -257,7 +293,7 @@ declare ret=0 \
         ccs_flatten_dir="$(dirname '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten')"
 ln -s '%{buildroot}%{_datadir}/cluster'/*.'metadata' \
       "${ccs_flatten_dir}"
-PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-tests
+PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" PYTHONEXEC="%{__python2} -Es" ./run-tests
 ret=$?
 %{__rm} -f -- "${ccs_flatten_dir}"/*.'metadata'
 [ ${ret} -eq 0 ] || exit ${ret}
@@ -289,37 +325,48 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %files cli -f .bashcomp-files
 %{_mandir}/man1/*.1*
 %{_bindir}/%{name}
-%{python2_sitelib}/%{name}/__main__.py*
-%{python2_sitelib}/%{name}/main.py*
-%{python2_sitelib}/%{name}/completion.py*
-# only useful here, rest of egg-info pulled through internal dependency
-%{python2_sitelib}/%{name}-*.egg-info/entry_points.txt
 
 %files -n python-%{name}
+%{python2_sitelib}/%{name}
+%{python2_sitelib}/%{name}-*.egg-info
+
+%files bin
+%{_libexecdir}/%{name}-%{version}
+
+%files common
+%{_datadir}/cluster
+%{_datarootdir}/%{name}
 %dir %{_defaultdocdir}/%{name}-%{version}
 %{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]]
 %license %{_defaultdocdir}/%{name}-%{version}/*[[:digit:]].txt
-%exclude %{python2_sitelib}/%{name}/__main__.py*
-%exclude %{python2_sitelib}/%{name}/main.py*
-%exclude %{python2_sitelib}/%{name}/completion.py*
-%exclude %{python2_sitelib}/%{name}/ext-plugins/*/
-%{python2_sitelib}/%{name}
-%{python2_sitelib}/%{name}-*.egg-info
-# entry_points.txt only useful for -cli package
-%exclude %{python2_sitelib}/%{name}-*.egg-info/entry_points.txt
-%{_libexecdir}/%{name}-%{version}
-%{_datadir}/cluster
 
 %files lib-general
-%{python2_sitelib}/%{name}/ext-plugins/lib-general
+%{_datarootdir}/%{name}/ext-plugins/lib-general
 
 %files lib-ccs
-%{python2_sitelib}/%{name}/ext-plugins/lib-ccs
+%{_datarootdir}/%{name}/ext-plugins/lib-ccs
 
 %files lib-pcs
-%{python2_sitelib}/%{name}/ext-plugins/lib-pcs
+%{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Tue Jun 06 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.76.0-1
+- factor "borrow validation schemas from pacemaker" out to a separate script
+- bump upstream package, see https://pagure.io/clufter/releases
+
+
+* Fri May 26 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.75.0-1
+- move nano fallback editor dependency to -cli package [PGissue#1]
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Wed Mar 29 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.70.0-2
+- split -bin and -common packages, the former becoming the only arch-specific
+- also move python-specific (entry points, main files) back from -cli package
+- also add virtual provides for python-clufter as python2-clufter
+- bump upstream package (version rolling the above changes out)
+- build for ppc64le
+  [rhbz#1402565]
+
 * Wed Aug 10 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.5-2
 - fix malformed man pages due to help screen being previously split on hyphens
 

@@ -1,12 +1,15 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base command stuff (TBD)"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
 from collections import MutableMapping
-from itertools import izip_longest
+try:
+    from itertools import zip_longest
+except ImportError:  # PY2 backward compatibility
+    from itertools import izip_longest as zip_longest
 from logging import getLogger
 from optparse import OptionParser
 from sys import stderr, stdin, stdout
@@ -33,11 +36,16 @@ from .utils import any2iter, \
                    nonetype, \
                    selfaware, \
                    tuplist
+from .utils_2to3 import MimicMeta, basestring, \
+                        foreach_u, filter_u, \
+                        iter_items, iter_values, \
+                        xrange
 from .utils_func import apply_aggregation_preserving_depth, \
                         apply_intercalate, \
                         apply_loose_zip_preserving_depth, \
                         apply_preserving_depth, \
                         bifilter, \
+                        foreach, \
                         tailshake, \
                         zip_empty
 from .utils_prog import FancyOutput, \
@@ -47,7 +55,7 @@ from .utils_prog import FancyOutput, \
 
 log = getLogger(__name__)
 
-protodecl = lambda x: len(x) == 2 and isinstance(x[0], Filter)
+fltiodecl = lambda x: len(x) == 2 and isinstance(x[0], Filter)
 
 # expected to be lowercase for more straightforward case-insensitive comparison
 CMD_HELP_OPTSEP_PRIMARY = 'options:'
@@ -63,14 +71,13 @@ class commands(PluginRegistry):
     pass
 
 
-class Command(object):
+class _Command(object):
     """Base for commands, i.e., encapsulations of filter chains
 
     Also see the docstring for `deco`.
     """
-    __metaclass__ = commands
 
-    @classmethod
+    @MimicMeta.classmethod
     def _resolve_filter_chain(cls, filters):
         res_input = cls._filter_chain
         res_output = apply_preserving_depth(filters.get)(res_input)
@@ -80,18 +87,19 @@ class Command(object):
             return res_output
         # drop the command if cannot resolve any of the filters
         res_input = apply_intercalate(res_input)
-        map(lambda (i, x): log.warning("Resolve at `{0}' command:"
-                                       " `{1}' (#{2}) filter fail"
-                                       .format(cls.name, res_input[i], i)),
-            filter(lambda (i, x): not(x),
-                   enumerate(apply_intercalate(res_output))))
+        foreach_u(lambda i, x: log.warning("Resolve at `{0}' command:"
+                                           " `{1}' (#{2}) filter fail"
+                                           .format(cls.name, res_input[i], i)),
+            filter_u(lambda i, x: not(x),
+                     enumerate(apply_intercalate(res_output))))
         return None
 
-    @hybridproperty
+    @MimicMeta.passdeco(hybridproperty)
     def filter_chain(this):
         """Chain of filter identifiers/classes for the command"""
         return this._filter_chain
 
+    @MimicMeta.method
     def __new__(cls, filters, *args):
         filter_chain = cls._resolve_filter_chain(filters)
         if filter_chain is None:
@@ -101,7 +109,7 @@ class Command(object):
         self._filters = OrderedDict((f.__class__.name, f) for f in
                                     apply_intercalate(filter_chain))
         fnc_defaults, fnc_varnames = self._fnc_defaults_varnames
-        for varname, default in fnc_defaults.iteritems():
+        for varname, default in iter_items(fnc_defaults):
             if not isinstance(default, basestring):
                 continue
             try:
@@ -123,14 +131,14 @@ class Command(object):
     # filter chain related
     #
 
-    @property
+    @MimicMeta.passdeco(property)
     def filter_chain_analysis(self):
         if self._filter_chain_analysis is None:
             filter_chain = self._filter_chain
             self._filter_chain_analysis = self.analyse_chain(filter_chain)
         return self._filter_chain_analysis
 
-    @staticmethod
+    @MimicMeta.staticmethod
     @selfaware
     def analyse_chain(me, filter_chain, analysis_acc=None):
         """Given the filter chain, return filter backtrack and terminal chain
@@ -165,6 +173,13 @@ class Command(object):
         #    ('A',
         #        ('B',
         #            ('C')))
+        # note also need to treat correctly, e.g.:
+        #    (
+        #      ('A',
+        #          ('B')),
+        #      ('C',
+        #          ('B'))
+        #    )
         # XXX: regardless if isinstance(filter_chain[1], tuple)
         if len(filter_chain) >= passed_filter_length + int(new):
             filter_chain = (filter_chain, )
@@ -176,33 +191,30 @@ class Command(object):
             bt = filter_backtrack.setdefault(i, OrderedDict())
             if new or not (bt or i_tail):  # preorder
                 # new for UPFILTERs, which are also terminals (input ones)
-                terminal_chain.append(i)
+                if new and terminal_chain:
+                    if isinstance(terminal_chain[0], list):
+                        terminal_chain = terminal_chain.append([i])
+                    else:
+                        terminal_chain[:] = [terminal_chain[:]] + [[i]]
+                else:
+                    terminal_chain.append(i)
             if pass_through:
                 if pass_through in bt:
                     raise CommandError(me,
                         "filter `{0}' is feeded by `{1}' more than once",
                         i.__class__.__name__, pass_through.__class__.__name__
                     )
-                common_protocols = None  # for when CompositeFormat involved
+                com = None  # for when CompositeFormat involved
                 if (hasattr(pass_through.out_format, '_protocols')
-                    and hasattr(i.in_format, '_protocols')):
-                    common_protocols = sorted(
-                        reduce(
-                            set.intersection,
-                            map(set, (pass_through.out_format._protocols,
-                                    i.in_format._protocols))
-                        ),
-                        key=lambda x:
-                            int(x == pass_through.out_format.native_protocol)
-                            + int(x == i.in_format.native_protocol)
-                    )
-                    if not common_protocols:
+                        and hasattr(i.in_format, '_protocols')):
+                    com = pass_through.out_format.common_protocols(i.in_format)
+                    if not com:
                         raise CommandError(me,
                             "filter `{0}' and its feeder `{1}' have no protocol"
                             " in common",
                             i.__class__.__name__, pass_through.__class__.__name__
                         )
-                bt[pass_through] = common_protocols
+                bt[pass_through] = com
             if i_tail:
                 # PASSDOWN
                 # this uses a dirty trick of exploiting the end of the list
@@ -228,9 +240,10 @@ class Command(object):
     # self-introspection (arguments, description, options)
     #
 
+    @MimicMeta.method
     def _figure_parser_opt_dumpnoop(self, options, shortopts):
         choices = []
-        for fname, f in self._filters.iteritems():
+        for fname, f in iter_items(self._filters):
             if issubclass(f.in_format.__class__, f.out_format.__class__):
                 choices.append(fname)
         # XXX NOOPizing doesn't make sense for input filters?
@@ -255,8 +268,9 @@ class Command(object):
             )
             options.append([["--" + optname_used], opt])
 
+    @MimicMeta.method
     def _figure_parser_opt_unofficial(self, options, shortopts, fnc_varnames):
-        # unofficial/unsupported ones
+        # unofficial/unsupported ones  (XXX shortopts unused)
         for var in fnc_varnames:
             optname_used = cli_decor(var)
             options.append([["--" + optname_used], dict(
@@ -264,10 +278,11 @@ class Command(object):
                 help="(undocumented expert option)",
             )])
 
+    @MimicMeta.method
     def _figure_parser_desc_opts(self, fnc_defaults, fnc_varnames,
                                  opt_group=None):
         readopts, common_tail = False, False
-        shortopts, options, expert =  {}, [], []
+        shortopts, options, expert =  OrderedDict(), [], []
         description = []
         fnc_varnames = set(fnc_varnames)
         opt_group = opt_group or OptionParser()
@@ -317,14 +332,15 @@ class Command(object):
             else:
                 description.append(line)
 
-        for short, aliases in shortopts.iteritems():  # foreach in ideal shorts
-            for i, alias in enumerate(aliases):  # foreach in conflicting ones
+        for short in tuple(shortopts):  # foreach in ideal shorts, ditto in...
+            for i, alias in enumerate(shortopts[short]):  # ... conflicting ones
                 for c in longopt_letters_reprio(options[alias][0][0]):
                     use = '-' + c
-                    if opt_group.has_option(use):
+                    if opt_group.has_option(use) or (i > 0 and c in shortopts):
                         continue
-                    if c not in shortopts or i == 0:
-                        break
+                    if c not in shortopts:
+                        shortopts[c] = (i, )
+                    break
                 else:
                     log.info("Could not find short option for `{0}'"
                              .format(options[alias][0]))
@@ -339,6 +355,7 @@ class Command(object):
         description = '\n'.join(description)
         return description, options
 
+    @MimicMeta.method
     def parser_desc_opts(self, opt_group=None):
         """Parse docstring as description + Option constructor args list"""
         if self._desc_opts is None:
@@ -351,27 +368,32 @@ class Command(object):
     # execution related
     #
 
-    @staticmethod
+    @MimicMeta.staticmethod
     @selfaware
-    def _iochain_check_terminals(me, io_chain, terminal_chain):
-        # validate "terminal filter chain" vs "io chain"
+    def _iochain_check_terminals(me, io_chain, terminal_chain, magic_fds,
+                                 interpolations={}):
+        # validate "terminal filter chain" vs "io chain" while solving magic_fds
         # 1. "shapes" match incl. input (head)/output (tail) protocol match
         if len(terminal_chain) == 1 and len(io_chain) == len(terminal_chain[0]):
             # see `deco`: 2.
             io_chain = args2tuple(io_chain)
+        ret = []
         to_check = apply_loose_zip_preserving_depth(terminal_chain, io_chain)
+        if to_check and fltiodecl(to_check[0]):
+            to_check = [to_check]  # restore _iochain_proceed-clipped wrapping
         for to_check_inner in to_check:
+            ret_to_check_inner = []
             for passno, check in enumerate(head_tail(to_check_inner)):
                 checked = apply_aggregation_preserving_depth(
                     lambda i:
                         head_tail(protodictval(i[1]))[0] not in getattr(i[0],
                             ('in_format', 'out_format')[passno])._protocols
                             and str(head_tail(i[1])[0]) or None
-                        if protodecl(i) else i if any(i) else None
+                        if fltiodecl(i) else i if any(i) else None
                 )(check)
                 checked_flat = apply_intercalate((checked,))
-                for order, proto in filter(lambda (i, x): x,
-                                           enumerate(checked_flat)):
+                for order, proto in filter_u(lambda i, x: x,
+                                             enumerate(checked_flat)):
                     if proto is zip_empty:
                         continue
                     raise CommandError(me,
@@ -382,8 +404,19 @@ class Command(object):
                         if isinstance(proto, (type(zip_empty), Filter))
                         else "`{0}' protocol not suitable".format(proto)
                     )
-        return to_check
+                # handle "magic files"
+                resolved = apply_aggregation_preserving_depth(
+                    lambda i:
+                        (i[0], SimpleFormat.io_decl_specials(i[1], passno == 0,
+                                                             magic_fds,
+                                                             interpolations))
+                        if fltiodecl(i) else i
+                )(check)
+                ret_to_check_inner.append(resolved)
+            ret.append(ret_to_check_inner)
+        return ret
 
+    @MimicMeta.method  # should be classmethod?
     def _iochain_proceed(self, cmd_ctxt, io_chain):
         # currently works sequentially, jumping through the terminals in-order;
         # when any of them (apparently the output one) hasn't its prerequisites
@@ -399,17 +432,23 @@ class Command(object):
         #     item so to prevent deadlocks on cond. var. wait)
         #     - see also `heapq` standard module
         filter_backtrack = cmd_ctxt['filter_chain_analysis']['filter_backtrack']
-        terminal_chain = cmd_ctxt['filter_chain_analysis']['terminal_chain']
+        terminal_chain = cmd_ctxt['filter_chain_analysis']['terminal_chain'][-1]
         terminals = apply_intercalate(terminal_chain)
-
-        terminal_chain = self._iochain_check_terminals(io_chain, terminal_chain)
 
         native_fds = dict((f.fileno(), f) for f in (stderr, stdin, stdout))
         magic_fds = native_fds.copy()
+        # XXX using with cmd_ctxt.prevented_taint() would be too pedantic
+        #     and, furthermore, would destroy order-preserving because of
+        #     OrderedDict to plain dict artificial "downcasting"
+        terminal_chain = self._iochain_check_terminals(io_chain,
+                                                       terminal_chain,
+                                                       magic_fds,
+                                                       cmd_ctxt['__filters__'])
+
         input_cache = cmd_ctxt.setdefault('input_cache', {}, bypass=True)
         worklist = list(reversed(tailshake(terminal_chain,
                                            partitioner=lambda x:
-                                           not (tuplist(x)) or protodecl(x))))
+                                           not (tuplist(x)) or fltiodecl(x))))
         # if any "EMPTY" (zip_empty) value present, respective class name ~ str
         unused, tstmp = {}, hex(int(time()))[2:]
         while worklist:
@@ -425,21 +464,17 @@ class Command(object):
             with flt_ctxt.prevented_taint():
                 fmt_kws = filterdict_keep(flt_ctxt, *flt.in_format.context)
             if not filter_backtrack[flt] and 'out' not in flt_ctxt:
-                # INFILTER in in-mode
-                log.debug("Run `{0}' filter with `{1}' io decl. as INFILTER"
+                # UPFILTER in in-mode
+                log.debug("Run `{0}' filter with `{1}' io decl. as UPFILTER"
                           .format(flt.__class__.__name__, io_decl))
                 if io_decl in input_cache:
                     in_obj = input_cache[io_decl]
                 else:
                     with cmd_ctxt.prevented_taint():
-                        io_decl = SimpleFormat.io_decl_specials(
-                                      io_decl, 1, magic_fds,
-                                      cmd_ctxt['__filters__']
-                        )
                         in_obj = flt.in_format.as_instance(*io_decl, **fmt_kws)
                     input_cache[io_decl] = flt_ctxt['in'] = in_obj
             elif filter_backtrack[flt] and 'out' not in flt_ctxt:
-                # not INFILTER in either mode (nor output already precomputed?)
+                # not UPFILTER in either mode (nor output already precomputed?)
                 log.debug("Run `{0}' filter with `{1}' io decl. as DOWNFILTER"
                           .format(flt.__class__.__name__, io_decl))
                 ok, notyet = bifilter(lambda x: 'out' in
@@ -457,9 +492,8 @@ class Command(object):
                                              for ny in notyet)))
                     continue
 
-                inputs = map(lambda x: cmd_ctxt.filter(x.__class__.__name__)
-                                       .get('out'),
-                             filter_backtrack[flt])
+                inputs = tuple(cmd_ctxt.filter(x.__class__.__name__).get('out')
+                               for x in filter_backtrack[flt])
                 assert all(inputs)
                 with cmd_ctxt.prevented_taint():
                     in_obj = flt.in_format.as_instance(*inputs, **fmt_kws)
@@ -469,8 +503,16 @@ class Command(object):
                     if flt.__class__.name in cmd_ctxt['filter_noop']:
                         ret = in_obj
                     else:
+                        # re io_decl: allow terminal filters have a peek at
+                        # respective resolved(!) filter IO declaration, so they
+                        # can, e.g., choose a final formatting (see cmd-wrap)
+                        # XXX useful just for output terminals, really
+                        if flt in terminals:
+                            flt_ctxt['io_decl'] = io_decl
                         with cmd_ctxt.prevented_taint():
                             ret = flt(in_obj, flt_ctxt)
+                        if flt in terminals:
+                            flt_ctxt.pop('io_decl')
                     flt_ctxt['out'] = ret
                 if flt not in terminals or not filter_backtrack[flt]:
                     if (flt.__class__.name in cmd_ctxt['filter_dump']
@@ -490,8 +532,8 @@ class Command(object):
                                                      " |highlight:{0}|"
                                                      .format(fn))
                     continue
-            # output time!  (INFILTER terminal listed twice in io_chain)
-            with cmd_ctxt.prevented_taint():
+            # output time!  (incl. UPFILTER terminal listed twice in io_chain)
+            with cmd_ctxt.prevented_taint():  # still needed for late binding
                 io_decl = SimpleFormat.io_decl_specials(io_decl, 0, magic_fds,
                                                         cmd_ctxt['__filters__'])
             log.debug("Run `{0}' filter with `{1}' io decl. as TERMINAL"
@@ -503,9 +545,10 @@ class Command(object):
                                          .format(passout['passout']))
 
         # close "magic" fds
-        map(lambda (k, f): k in native_fds or f.close(), magic_fds.iteritems())
+        foreach(lambda k: k in native_fds or magic_fds[k].close(), magic_fds)
         return EC.EXIT_SUCCESS  # XXX some better decision?
 
+    @MimicMeta.method
     def __call__(self, opts, args=None, cmd_ctxt=None):
         """Proceed the command"""
         ec = EC.EXIT_SUCCESS
@@ -514,12 +557,12 @@ class Command(object):
             getattr(opts, 'color', 'auto')
         ]
         cmd_ctxt = cmd_ctxt or CommandContext({
-            'filter_chain_analysis': self.filter_chain_analysis,
             'filter_noop':           getattr(opts, 'noop', ()),
             'filter_dump':           getattr(opts, 'dump', ()),
             'system':                getattr(opts, 'sys', ''),
-            'system_extra':          filter(len, getattr(opts, 'dist', '')
-                                                 .split(',')),
+            'system_extra':          tuple(se for se in
+                                           getattr(opts, 'dist', '').split(',')
+                                           if se),
             'svc_output':            FancyOutput(f=stderr,
                                                  quiet=getattr(opts, 'quiet',
                                                                False),
@@ -529,7 +572,9 @@ class Command(object):
                                      ),
             'color':                color,
         }, bypass=True)
-        cmd_ctxt.ensure_filters(self._filters.itervalues())
+        cmd_ctxt.setdefault('filter_chain_analysis',
+                            self.filter_chain_analysis, bypass=True)
+        cmd_ctxt.ensure_filters(iter_values(self._filters))
         kwargs = {}
         # desugaring, which is useful mainly if non-contiguous sequence
         # of value-based options need to be specified
@@ -579,7 +624,7 @@ class Command(object):
                   .format(self.__class__.name, args, kwargs))
         io_driver = any2iter(self._fnc(cmd_ctxt, **kwargs))
         io_handler = (self._iochain_proceed, lambda c, ec=EC.EXIT_SUCCESS: ec)
-        io_driver_map = izip_longest(io_driver, io_handler)
+        io_driver_map = zip_longest(io_driver, io_handler)
         for driver, handler in io_driver_map:
             driver = () if driver is None else (driver, )
             ec = handler(cmd_ctxt, *driver)
@@ -587,7 +632,7 @@ class Command(object):
                 break
         return ec
 
-    @classmethod
+    @MimicMeta.classmethod
     def deco(cls, *filter_chain):
         """Decorator as an easy factory of actual commands
 
@@ -612,27 +657,30 @@ class Command(object):
 
         when reformatted as per the only Approved Indenting Convention (TM):
 
-            (A,
-                (B),
-                (C,
-                    (D),
-                    (P))),
-            (O,
-                (P))
+            (
+               (A,
+                   (B),
+                   (C,
+                       (D),
+                       (P))),
+               (O,
+                       (P))
+            )
 
         where, for filter x (in {A, ..., D, O, P} for the example at hand):
 
-            EXPRESSION  ::= UPFILTERS
+            FILTERCHAIN ::= UPFILTERS
             UPFILTERS   ::= TERMINAL | ( FILTERS )
             FILTERS     ::= FILTER, | FILTERS FILTER
             FILTER      ::= PASSDOWN | TERMINAL
-            PASSDOWN    ::= (TERMINAL, DOWNFILTERS)
+            PASSDOWN    ::= (TERMINAL, FILTERS)  # ~ DOWNFILTERS from that down
             TERMINAL    ::= x
-            DOWNFILTERS ::= FILTERS
 
         where:
             - {UP,DOWN}FILTERS dichotomy is present only as
-              a forward-reference for easier explanation
+              a forward-reference for easier explanation;
+              it's asymmetric, meaning that UPFILTERS are terminals
+              in the graph, whereas DOWNFILTERS can also be PASSDOWNs
             - there is a limitation such that each filter can
               be contained as at most one node in the graph as above
               (this corresponds to the notion of inputs merge for
@@ -715,16 +763,19 @@ class Command(object):
         return deco_fnc
 
 
-class CommandAlias(object):
-    """Way to define either static or dynamic command alias"""
-    __metaclass__ = commands
+Command = MimicMeta('Command', commands, _Command)
 
+
+class _CommandAlias(object):
+    """Way to define either static or dynamic command alias"""
+
+    @MimicMeta.method
     def __new__(cls, flts, cmds, *args):
         ic, sys, sys_extra = (lambda i={}, s='', e='', *a: (i, s, e))(*args)
         # XXX really pass mutable cmds dict?
         use_obj = cls
-        use_obj = use_obj._fnc(cmds, sys.lower(),
-                               tuple(sys_extra.lower().split(',')))
+        use_obj = use_obj._fnc(cmds, sys,  # see Command.__call__ (cmd_ctxt)
+                               tuple(se for se in sys_extra.split(',') if se))
         for i in xrange(1, 100):  # prevent infloop by force
             if isinstance(use_obj, basestring):
                 use_obj = cmds.get(use_obj, None)
@@ -749,7 +800,7 @@ class CommandAlias(object):
             assert isinstance(use_obj, (nonetype, Command)), repr(use_obj)
             return use_obj
 
-    @classmethod
+    @MimicMeta.classmethod
     def deco(outer_cls, decl):
         if not hasattr(decl, '__call__'):
             assert issubclass(decl, Command)
@@ -765,3 +816,6 @@ class CommandAlias(object):
         # optimization: shorten type() -> new() -> probe
         ret = outer_cls.probe(fnc.__name__, (outer_cls, ), attrs)
         return ret
+
+
+CommandAlias = MimicMeta('CommandAlias', commands, _CommandAlias)

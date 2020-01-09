@@ -1,7 +1,10 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
+
+from __future__ import print_function
+
 """Machinery entry point"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
@@ -10,6 +13,8 @@ from optparse import OptionParser, \
                      OptionGroup, \
                      IndentedHelpFormatter
 from os.path import basename, realpath
+# XXX should eventually switch/fallback to "distro" external package for
+# the latter (via https://bugzilla.redhat.com/1219172#c6, but see also #c9)
 from platform import system, linux_distribution
 from sys import version
 
@@ -19,6 +24,8 @@ from .completion import Completion
 from .error import EC
 from .facts import aliases_dist, format_dists, supported_dists
 from .utils import args2sgpl, head_tail, identity
+from .utils_2to3 import iter_items, xrange
+from .utils_func import foreach
 from .utils_prog import ExpertOption, make_options, set_logging, which
 
 try:
@@ -137,9 +144,9 @@ opts_common = (
         dest='loglevel',
         default=logging.getLevelName(logging.WARNING),
         type='choice',
-        choices=map(logging.getLevelName,
-                    xrange(logging.NOTSET, logging.CRITICAL + 1,
-                           logging.DEBUG - logging.NOTSET)),
+        choices=list(map(logging.getLevelName,
+                         xrange(logging.NOTSET, logging.CRITICAL + 1,
+                                logging.DEBUG - logging.NOTSET))),
         help="specify log level [%default out of %choices]"
     )),
     # TODO other logging related stuff (if any)
@@ -215,6 +222,16 @@ opts_nonmain = (
 class SharedHelpFormatter(IndentedHelpFormatter):
     """IndentedHelpFormatter to expand choices along defaults"""
     choices_tag = "%choices"
+
+    def __init__(self, *args, **kwargs):
+        from textwrap import fill, wrap
+        IndentedHelpFormatter.__init__(self, *args, **kwargs)
+        tw = type('textwrap_mock', (object, ), dict(
+            fill=staticmethod(fill),
+            wrap=staticmethod(lambda *args, **kwargs:
+                wrap(*args, **dict(kwargs, break_on_hyphens=False)),
+            )))
+        self.format_option.__globals__['textwrap'] = tw
 
     def expand_default(self, option):
         ret = IndentedHelpFormatter.expand_default(self, option)
@@ -317,7 +334,7 @@ def run(argv=None, *args):
             msg = version_parts
             if loglevel <= logging.INFO:
                 msg += ('', "Python runtime:", version)
-            print version_text(*msg)
+            print(version_text(*msg))
             return ec
 
     logging.basicConfig()
@@ -328,7 +345,7 @@ def run(argv=None, *args):
         pass
     set_logging(opts)
     log = logging.getLogger(__name__)
-    map(lambda args: log.log(*args), getattr(opts, '_deferred_log', ()))
+    foreach(lambda args: log.log(*args), getattr(opts, '_deferred_log', ()))
 
     cm = CommandManager.init_lookup(ext_plugins=not opts.skip_ext,
                                     ext_plugins_user=opts.ext_user,
@@ -346,7 +363,7 @@ def run(argv=None, *args):
                                         ', use --list to get all:'),
                               ellip=opts.skip_ext or not opts.list)
         if opts.list == 'cmds':
-            print cmds
+            print(cmds)
         elif opts.list and opts.list.startswith('dists_'):
             verbosity, acc = int(opts.list.split('dists_', 1)[1]), []
             if verbosity == 0:
@@ -361,22 +378,22 @@ def run(argv=None, *args):
                     " explicitly supported",
                     "# (all versions any change/update is tracked at)",
                 ))
-            print '\n'.join(acc + [format_dists(verbosity)])
+            print('\n'.join(acc + [format_dists(verbosity)]))
         elif opts.completion:
             c = Completion.get_completion(opts.completion, prog,
                                           opts_common, opts_main, opts_nonmain)
-            print c(cm.plugins.iteritems())
+            print(c(iter_items(cm.plugins)))
         else:
-            print parser.format_customized_help(
+            print(parser.format_customized_help(
                 usage="%prog [<global option> ...] [<cmd> [<cmd option ...>]]",
                 description=description_text(width=0),
                 description_raw=cmds,
                 epilog='\n'.join(args2sgpl(
                     "To get help for given command, just precede or follow"
-                    " it with `--help'.",
+                    " it with --help.",
                     *report_bugs
                 ))
-            )
+            ))
         return ec
     elif prog_simple != prog_real:
         args = [prog_simple] + argv
@@ -384,7 +401,7 @@ def run(argv=None, *args):
     # prepare option parser to be reused by sub-commands
     parser.enable_interspersed_args()
     modify_group = parser.get_option_group(opts_main[0][0][0])
-    map(parser.remove_option, map(lambda x: x[0][0], opts_main))
+    foreach(parser.remove_option, map(lambda x: x[0][0], opts_main))
     modify_group.set_title("Command options")
     modify_group.set_description(None)
     parser.add_options(make_options(opts_nonmain))
@@ -404,6 +421,6 @@ def run(argv=None, *args):
     # note that the parser carries opts and "Common options" group
     ec = cm(parser, args)
     #except Exception as e:
-    #    print "FATAL: Unhandled exception: {0}".format(e)
+    #    print("FATAL: Unhandled exception: {0}".format(e))
     #    ex = EC.EXIT_FAILURE
     return ec

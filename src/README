@@ -31,7 +31,7 @@ name searchable in *A new alphabetical vocabulary, Gailic and English*
 The package can either be used as a separate CLI tool (as per *What*) or as
 a Python library, which is the case, e.g., with `pcs`_.
 
-.. _pcs: https://github.com/feist/pcs/
+.. _pcs: https://github.com/ClusterLabs/pcs
 
 
 Demo
@@ -45,13 +45,33 @@ what one can use directly after cloning the repository and running
 .. code-block:: bash
 
   $ ./run-dev ccs2pcscmd -gsq tests/filled.conf
-  # sequence generated on 2016-08-08 19:55:36 with: clufter 0.59.5
+  #!/bin/sh
+  # sequence generated on 2017-03-10 17:01:31 with: clufter 0.60.0a
   # invoked as: ['./run-dev', 'ccs2pcscmd', '-gsq', 'tests/filled.conf']
-  # targeting system: ('linux', 'fedora', '22', 'Twenty Two')
-  pcs cluster auth ju hele
-  pcs cluster setup --name test ju hele --consensus 200 --token 5000 \
-    --join 100
-  pcs cluster start --all && sleep 60
+  # targeting system: ('linux', 'fedora', '27', 'Rawhide')
+  # using interpreter: CPython 2.7.13
+  pcs cluster auth ju hele <>/dev/tty
+  pcs cluster setup --name test ju hele --consensus 200 --join 100 \
+    --token 5000
+  pcs cluster start --all --wait=60
+  pcs cluster cib tmp-cib.xml
+  pcs -f tmp-cib.xml property set stonith-enabled=false
+  pcs cluster cib-push tmp-cib.xml --config
+
+or using Python 3:
+
+.. code-block:: bash
+
+  $ python3 ./run-dev ccs2pcscmd -gsq tests/filled.conf
+  #!/bin/sh
+  # sequence generated on 2017-03-10 17:02:34 with: clufter 0.60.0a
+  # invoked as: ['run-dev', 'ccs2pcscmd', '-gsq', 'tests/filled.conf']
+  # targeting system: ('linux', 'fedora', '27', 'Rawhide')
+  # using interpreter: CPython 3.6.0
+  pcs cluster auth ju hele <>/dev/tty
+  pcs cluster setup --name test ju hele --consensus 200 --join 100 \
+    --token 5000
+  pcs cluster start --all --wait=60
   pcs cluster cib tmp-cib.xml
   pcs -f tmp-cib.xml property set stonith-enabled=false
   pcs cluster cib-push tmp-cib.xml --config
@@ -70,7 +90,7 @@ automagic), or just pipe that into the shell interpreter, for instance:
 
 .. code-block:: bash
 
-  $ ./run-dev ccs2pcscmd -gsq tests/filled.conf | sh -x
+  $ ./run-dev ccs2pcscmd -gsq tests/filled.conf | bash -x
 
 which will also turn on echoing of what is being executed, just in case.
 
@@ -88,16 +108,19 @@ Dependencies
 
 Python-wise:
 
-- `lxml`_ (``python-lxml``)
+- `lxml`_ (``python-lxml``/``python3-lxml``)
 
 general:
 
-- Python 2
+- Python
 
   - 2.7 preferred
 
   - 2.6 with `ordereddict`_ or some kind of ``collections.OrderedDict``
     backport (#929258) required
+
+  - 3.2+ support currently deemed experimental (the test suite is passing),
+    bug reports appreciated (see `Reporting issues`_)
 
 - embedded ``ccs_flatten`` (originally `pacemaker.git/extra/rgmanager
   <https://github.com/ClusterLabs/pacemaker/commit/6ef3f77>`_) compiled
@@ -176,6 +199,19 @@ It's also possible this is already performed on the packaging level.
 ---------
  Contact
 ---------
+
+Reporting issues
+~~~~~~~~~~~~~~~~
+
+Bug reports, suggestions and feature requests are best directed at
+https://pagure.io/clufter/issues, alternatively check the bottom of
+``clufter --help`` screen when using a distribution version.
+
+The more feedback samples emerge, the better this project can get.
+
+
+Wider community
+~~~~~~~~~~~~~~~
 
 Common cluster/HA channels falling under `ClusterLabs`_ umbrella:
 

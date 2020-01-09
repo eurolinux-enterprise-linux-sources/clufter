@@ -1,9 +1,9 @@
 # -*- coding: UTF-8 -*-
-version, alpha = '0.59.5', False
+version, alpha = '0.76.0', False
 
 # https://www.python.org/dev/peps/pep-0440 + git export magic using export-subst
-_git_hash = "e830ef2".strip('$').replace("Format:%h", "")
-_git_deco = ' (HEAD -> master, tag: v0.59.5)'.strip('$()').replace("Format:%d", "")
+_git_hash = "c06efc1".strip('$').replace("Format:%h", "")
+_git_deco = ' (HEAD -> master, tag: v0.76.0)'.strip('$()').replace("Format:%d", "")
 _git_deco_arr = _git_deco.split(', ')
 _git_tags = [i for i in _git_deco_arr if i.startswith("tag: v")]
 _git_branches = [i for i in _git_deco_arr if i not in _git_tags + ['HEAD']]
@@ -17,7 +17,7 @@ elif _git_tags:
 
 license = 'GPLv2+'
 copyright = """\
-Copyright (C) 2016 Red Hat, Inc.
+Copyright (C) 2017 Red Hat, Inc.
 Licensed under {0}.
 """.format(license).rstrip()
 

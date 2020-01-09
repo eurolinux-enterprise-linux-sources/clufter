@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base protocol stuff (metaclass, etc.)"""
@@ -10,6 +10,7 @@ from logging import getLogger
 
 from .plugin_registry import PluginRegistry
 from .utils import args2sgpl, tuplist
+from .utils_2to3 import MimicMeta
 from .utils_prog import cli_undecor
 
 log = getLogger(__name__)
@@ -35,14 +36,14 @@ class protocols(PluginRegistry):
                               pr if isinstance(pr, Protocol) else Protocol(pr))
 
 
-class Protocol(str):
-    """Class intended to be (exceptionally) instantioned (enhanced string)"""
-    __metaclass__ = protocols
-
+class _Protocol(object):
+    """Class intended to be (exceptionally) instantiated (enhanced string)"""
+    @MimicMeta.method
     def __new__(cls, *args, **kwargs):
         ret = super(Protocol, cls).__new__(cls, *args, **kwargs)
         return protocols.register(ret)
 
+    @MimicMeta.method
     def ensure_proto(self, value=None):
         work_val = protodictval(value)
         work_val = work_val if tuplist(work_val) else (str(self), work_val) \
@@ -51,3 +52,6 @@ class Protocol(str):
             value['passin'] = work_val
             work_val = value
         return work_val
+
+
+Protocol = MimicMeta('Protocol', protocols, _Protocol, (str, ))

@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -42,6 +42,11 @@ cib2pcscmd_whitelist = (
     #'default-action-timeout',
 )
 
+# delay list a.k.a. what can play a role later on, but not now
+cib2pcscmd_delaylist = (
+    'enable-acl',
+)
+
 cib2pcscmd = ('''\
     <xsl:for-each select="cluster_property_set">
         <xsl:for-each select="nvpair">
@@ -66,6 +71,11 @@ cib2pcscmd = ('''\
                     verbose_ec_test
 ) + '''
                 </xsl:when>
+                <xsl:when test="
+''' + (
+                    xslt_is_member('@name', cib2pcscmd_delaylist)
+) + '''">
+                </xsl:when>
                 <xsl:otherwise>
                     <xsl:message>
                         <xsl:value-of select="concat(
@@ -84,14 +94,16 @@ cib2pcscmd = ('''\
 
 ###
 
+from ....utils_2to3 import execfile
+from ....utils_prog import dirname_x
 from ....utils_xslt import xslt_is_member
 
 from logging import getLogger
 log = getLogger(__name__)
 
 # XXX a bit dirty DRY approach
-from os.path import dirname, join
-use = join(reduce(lambda a, b: dirname(a), xrange(2), __file__), '__init__.py')
+from os.path import join
+use = join(dirname_x(__file__, 2), '__init__.py')
 myglobals = dict(__package__=__package__, __name__=__name__)
 try:
     execfile(use, myglobals)

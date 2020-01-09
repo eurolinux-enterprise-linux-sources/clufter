@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Easy (at least for usage) plugin framework"""
@@ -9,11 +9,15 @@ from contextlib import contextmanager
 from fnmatch import translate
 from imp import PY_SOURCE, find_module, get_suffixes, load_module
 from logging import getLogger
-from os import walk
+from os import pathsep, walk
 from os.path import abspath, dirname, isabs, isdir, join, splitext
 from re import compile as re_compile
 from sys import modules
 
+try:
+    from .defaults import EXTPLUGINS_SHARED
+except ImportError:
+    EXTPLUGINS_SHARED = ''
 from .utils import args2tuple, \
                    args2sgpl, \
                    classproperty, \
@@ -22,6 +26,7 @@ from .utils import args2tuple, \
                    filterdict_remove, \
                    hybridproperty, \
                    tuplist
+from .utils_2to3 import StandardError, filter_u, foreach_u  #, iter_values
 from .utils_func import apply_intercalate
 from .utils_prog import ProtectedDict, cli_decor, getenv_namespaced
 
@@ -29,9 +34,12 @@ log = getLogger(__name__)
 module_ext = dict((t, s) for s, m, t in get_suffixes())[PY_SOURCE]
 
 here = dirname(abspath(__file__))
-EXTPLUGINS = getenv_namespaced('EXTPLUGINS', 'ext-plugins')
-if not isabs(EXTPLUGINS):
-    EXTPLUGINS = join(here, EXTPLUGINS)
+
+EXTPLUGINS = tuple(e if isabs(e) else join(here, e) for e in
+    map(str.strip, getenv_namespaced(
+        'EXTPLUGINS', pathsep.join(('ext-plugins', EXTPLUGINS_SHARED))
+    ).rstrip(pathsep).split(pathsep))
+)
 
 
 class MetaPlugin(object):
@@ -74,8 +82,8 @@ class PluginRegistry(type):
                 # (e.g., specific plugin was imported natively)
                 registry.setup()
                 PluginRegistry._registries.add(registry)
-                # rely on __builtin__ being always present, hence failing test
-                if (registry.namespace or '__builtin__') not in modules:
+                # rely on sys being always present (tautology) -> failing test
+                if (registry.namespace or 'sys') not in modules:
                     # XXX hack to prevent RuntimeWarning due to missing parent
                     #     module (e.g., some tests in the test suite)
                     __import__(registry.namespace)
@@ -198,10 +206,10 @@ class PluginRegistry(type):
         attrs = (('_path_context', None), ('_path_mapping', {}),
                  ('_plugins', ps), ('_plugins_ro', ProtectedDict(ps)))
         if reset:
-            map(lambda (a, d): setattr(registry, a, d), attrs)
+            foreach_u(lambda a, d: setattr(registry, a, d), attrs)
         else:
-            map(lambda (a, d): setattr(registry, a, getattr(registry, a, d)),
-                attrs)
+            foreach_u(lambda a, d: setattr(registry, a,
+                                           getattr(registry, a, d)), attrs)
         registry._native_plugins = np = getattr(registry, '_native_plugins', {})
         registry._native_plugins_ro = ProtectedDict(np)
         if reset:
@@ -230,8 +238,12 @@ class PluginRegistry(type):
                 for root, dirs, files in walk(path):
                     if root != path:
                         break  # ATM we only support flat dir (nested ~ private)
-                    for name, ext in filter(
-                        lambda (name, ext):
+                    #try:
+                    #    dirs.remove('__pycache__')  # PY3 (if we ever nest)
+                    #except ValueError:
+                    #    pass
+                    for name, ext in filter_u(
+                        lambda name, ext:
                             fp.match(name) and
                             (ext == module_ext or isdir(join(root, name))),
                         (splitext(x) for x in files + dirs)
@@ -280,7 +292,7 @@ class PluginManager(object):
         kwargs = filterdict_keep(kwargs, 'paths')
         ret.update(registry.discover(fname_start=tuple(to_discover), **kwargs))
 
-        to_discover.difference_update(ret.iterkeys())
+        to_discover.difference_update(ret)
         native_plugins = registry.native_plugins
         ret.update(filterdict_remove(to_discover,
                                      _fn_=lambda x: native_plugins[x],
@@ -296,9 +308,10 @@ class PluginManager(object):
         plugins = args2sgpl(plugin, *plugins)
         ext_plugins = []
         if kwargs.get('ext_plugins', True):
-            for root, dirs, _ in walk(EXTPLUGINS, followlinks=True):
-                ext_plugins.extend(join(root, d) for d in dirs)
-                break
+            for e in EXTPLUGINS:
+                for root, dirs, _ in walk(e, followlinks=True):
+                    ext_plugins.extend(join(root, d) for d in dirs)
+                    break
         ext_plugins.extend(
             abspath(d) for d in
             apply_intercalate([d.split(':') for d in
@@ -341,4 +354,4 @@ class PluginManager(object):
         return self._plugins
 
     #def __iter__(self):
-    #    return self._plugins.itervalues()
+    #    return iter_values(self._plugins)

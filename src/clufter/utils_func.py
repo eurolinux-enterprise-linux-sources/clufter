@@ -1,12 +1,19 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2016 Red Hat, Inc.
+# Copyright 2017 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Various functional-paradigm helpers"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
-from .utils import areinstances, args2sgpl, tuplist
+from collections import deque
+from functools import reduce
 
+from .utils import areinstances, args2sgpl, tuplist
+from .utils_2to3 import enumerate_u, reduce_u
+
+# Non-lazy (materialized at one point) variant of map
+# (http://stackoverflow.com/a/18433519).
+foreach = lambda *args: deque(map(*args), maxlen=0)
 
 apply_preserving_depth = \
     lambda action: \
@@ -50,12 +57,12 @@ add_item = lambda seq, i: \
 apply_partition = \
     lambda i, partitioner: \
         (lambda result: result[:-1] if result[-1] == type(i)() else result)(
-            reduce(
-                lambda acc, (ee, ii):
+            reduce_u(
+                lambda acc, ee, ii:
                     acc[:-1] + [add_item(acc[-1], ii)]
                     if not partitioner(ii, ee, acc) else (acc if ee else [])
                         + [add_item(type(i)(), ii)] + [type(i)()],
-                enumerate(i),
+                enumerate_u(i),
                 [type(i)()]
             )
         )
@@ -64,11 +71,11 @@ apply_partition = \
 apply_split = \
     lambda i, splitter: \
         (lambda result: result[:-1] if result[-1] == type(i)() else result)(
-            reduce(
-                lambda acc, (ee, ii):
+            reduce_u(
+                lambda acc, ee, ii:
                     acc[:-1] + [add_item(acc[-1], ii)]
                     if not splitter(ii, ee, acc) else acc + [type(i)()],
-                enumerate(i),
+                enumerate_u(i),
                 [type(i)()]
             )
         )
@@ -77,6 +84,12 @@ apply_split = \
 bifilter = \
     lambda fnc, seq: \
         reduce(lambda acc, x: acc[int(not fnc(x))].append(x) or acc,
+               seq, ([], []))
+
+## + 2-to-3 unpacking version
+bifilter_unpack = \
+    lambda fnc, seq: \
+        reduce(lambda acc, x: acc[int(not fnc(*x))].append(x) or acc,
                seq, ([], []))
 
 # Given the partitioning function, do the recursive refinement in a way
