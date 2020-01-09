@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Program-specific commons"""
@@ -25,6 +25,7 @@ from .utils import areinstances, \
                    isinstanceexcept, \
                    selfaware, \
                    tuplist
+from .utils_func import apply_split
 
 log = logging.getLogger(__name__)
 
@@ -337,8 +338,15 @@ class FancyOutput(object):
         'error',
         'header',
         'highlight',
+        'note',
         'subheader',
         'warning',
+
+        'pcscmd_comment',
+        'pcscmd_file',
+        'pcscmd_pcs',
+        'pcscmd_subcmd',
+        'pcscmd_metaword',
     )
     re_color = re_compile(
         '\|(?P<logic>' + '|'.join(logic_colors) + '):(?P<msg>[^\|]*)\|'
@@ -369,21 +377,47 @@ class FancyOutput(object):
         error     = 'lightred',
         header    = 'magenta',
         highlight = 'green',
+        note      = 'brown',
         subheader = 'blue',
-        warning   = 'darkgray',
+        warning   = 'red',
+
+        pcscmd_comment  = 'brown',
+        pcscmd_file     = 'magenta',
+        pcscmd_pcs      = 'blue',
+        pcscmd_subcmd   = 'green',
+        pcscmd_metaword = 'cyan',
     )
 
     @classmethod
     def get_color(cls, spec):
         return cls.colors.get(spec, spec if spec.startswith('\033[') or not spec
-                                    else '\033[' + spec)
+                                    else spec.join(('\033[', 'm')))
+
+    @classmethod
+    def normalized(cls, s):
+        assert isinstance(s, basestring)
+        return ''.join(map(
+            lambda x: x.rsplit('\033[', 1)[0],
+            apply_split(
+                s,
+                lambda i, _, a: i == 'm' and a
+                                         and a[-1].rstrip('0123456789;')[-2:]
+                                             == '\033['
+            )
+        ))
+
+    @classmethod
+    def len_normalized(cls, s):
+        return len(cls.normalized(s))
 
     # TODO use /etc/terminal-colors.d/clufter.{enable,disable,scheme}
-    def __init__(self, f=stdout, recheck=False, color=None, quiet=False, **cfg):
+    def __init__(self, f=stdout, recheck=False, color=None, quiet=False,
+                 prefix='', **cfg):
         if not isinstance(f, file):
             f = fdopen(f, "a")
         self._f = f
         self._quiet = quiet
+        self._prefix = prefix
         self._table = self.table.copy().update(cfg)
         if color is not None:
             recheck = False
@@ -395,6 +429,11 @@ class FancyOutput(object):
     def __call__(self, s, **kwargs):
         if self._quiet and not kwargs.pop('urgent', False):
             return
+        if self._prefix:
+            prefix = self._prefix
+            if 'prefix_arg' in kwargs:
+                prefix = prefix.format(kwargs['prefix_arg'])
+            s = prefix + s
         self._handle(s, **kwargs)
         self._f.flush()
 

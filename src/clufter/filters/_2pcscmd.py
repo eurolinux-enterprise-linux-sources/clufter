@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """*2pcscmd filters helpers"""
@@ -48,10 +48,12 @@ def coro2pcscmd(**kwargs):
             what=kwargs.get(w) or w
         ) if w in kwargs else ''
     return ('''\
+    <xsl:variable name="ClusterName" select="string(@name
+                                                    |totem/@cluster_name)"/>
     <xsl:if test="not($pcscmd_dryrun)">
         <xsl:if test="not($pcscmd_noauth)">
 ''' + (
-            verbose_inform('"auth cluster: ", @name')
+            verbose_inform('"auth cluster: ", $ClusterName')
 ) + '''
             <xsl:value-of select="'pcs cluster auth'"/>
 
@@ -67,7 +69,7 @@ def coro2pcscmd(**kwargs):
         <xsl:if test="not($pcscmd_noguidance)">
             <!-- see rhbz#1210833 -->
 ''' + (
-            verbose_inform('"check cluster includes local machine: ", @name')
+            verbose_inform('"check cluster includes local machine: ", $ClusterName')
 ) + r'''
             <xsl:value-of select="concat(
                 'for l in $(comm -12',
@@ -77,25 +79,25 @@ def coro2pcscmd(**kwargs):
                     ' &lt;(python -m json.tool /var/lib/pcsd/tokens',
                         ' | sed -n &quot;s|^\s*\&quot;[^\&quot;]\+\&quot;:\s*\&quot;\([0-9a-f-]\+\)\&quot;.*|\1|1p&quot;',
                         ' | sort)',
-                ') @SENTINEL@; do %(NL)s',
-                'grep -Eq &quot;$(python -m json.tool /var/lib/pcsd/tokens',
+                ') @SENTINEL@; do',
+                ' grep -Eq &quot;$(python -m json.tool /var/lib/pcsd/tokens',
                     ' | sed -n &quot;s|^\s*\&quot;\([^\&quot;]\+\)\&quot;:\s*\&quot;${l}\&quot;.*|\1|1p&quot;)&quot;',
                     ' - &lt;&lt;&lt;&quot;')"/>
             %(descent_node)s
             <xsl:value-of select="concat(
-                '&quot; &amp;&amp; break%(NL)s',
-                'false%(NL)s',
-                'done || {%(NL)s',
-                'echo &quot;WARNING: cluster being created ought to include this very local machine&quot;%(NL)s',
-                'read -p &quot;Do you want to continue [yN] (60s timeout): &quot; -t 60 || :%(NL)s',
-                'test &quot;${REPLY}&quot; = &quot;y&quot; || kill -INT $$%(NL)s',
-                '}%(NL)s:%(NL)s'
+                '&quot; &amp;&amp; break;',
+                ' false;',
+                ' done || {',
+                ' echo &quot;WARNING: cluster being created ought to include this very local machine&quot;;',
+                ' read -p &quot;Do you want to continue [yN] (60s timeout): &quot; -t 60 || :;',
+                ' test &quot;${REPLY}&quot; = &quot;y&quot; || kill -INT $$;',
+                ' }%(NL)s'
             )"/>
         </xsl:if>
 ''' + (
-        verbose_inform('"new cluster: ", @name')
+        verbose_inform('"new cluster: ", $ClusterName')
 ) + '''
-        <xsl:value-of select="'pcs cluster setup --start'"/>
+        <xsl:value-of select="'pcs cluster setup'"/>
         <xsl:choose>
             <xsl:when test="$pcscmd_enable">
                 <xsl:value-of select="' --enable'"/>
@@ -104,21 +106,39 @@ def coro2pcscmd(**kwargs):
                 <xsl:message>%(msg_enable)s</xsl:message>
             </xsl:otherwise>
         </xsl:choose>
-        <xsl:value-of select="concat(' --name ', @name)"/>
+        <xsl:value-of select="concat(' --name ', $ClusterName)"/>
 
         %(descent_node)s
         %(descent_cman)s
         %(descent_totem)s
         %(descent_quorum)s
         <xsl:value-of select="'%(NL)s'"/>
+
+        <xsl:choose>
+            <xsl:when test="$pcscmd_start_wait &gt; 0">
 ''' + (
-        verbose_ec_test
+                verbose_inform('"starting cluster and waiting for it to come up: ", $pcscmd_start_wait, " seconds"')
 ) + '''
+            </xsl:when>
+            <xsl:otherwise>
+''' + (
+                verbose_inform('"starting cluster"')
+) + '''
+            </xsl:otherwise>
+        </xsl:choose>
+
+        <xsl:value-of select="'pcs cluster start --all'"/>
         <xsl:if test="$pcscmd_start_wait &gt; 0">
-''' + (
-            verbose_inform('"waiting for cluster to come up: ", @name, " seconds"')
-) + '''
-            <xsl:value-of select="concat('sleep ', $pcscmd_start_wait)"/>
+            <xsl:choose>
+                <xsl:when test="$pcscmd_extra_wait_cluster_start">
+                    <xsl:value-of select="concat(' --wait=',
+                                                 $pcscmd_start_wait)"/>
+                </xsl:when>
+                <xsl:otherwise>
+                    <xsl:value-of select="concat(' &amp;&amp; sleep ',
+                                                  $pcscmd_start_wait)"/>
+                </xsl:otherwise>
+            </xsl:choose>
             <xsl:value-of select="'%(NL)s'"/>
 ''' + (
             verbose_ec_test
@@ -128,8 +148,8 @@ def coro2pcscmd(**kwargs):
 ''') % dict(
     NL=NL,
     msg_enable="NOTE: cluster infrastructure services not enabled"
-               " at this point, which can be changed any time by issuing:"
-               " pcs cluster enable --all",
+               " at this point, which can be changed any time by issuing"
+               " `pcs cluster enable --all`",
     **dict(('descent_' + k, descent(k))
            for k in ('cman', 'node', 'quorum', 'totem'))
 )

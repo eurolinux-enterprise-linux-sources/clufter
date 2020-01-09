@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 
@@ -36,8 +36,8 @@ which ccs_flatten 2>/dev/null || (
 run_check() {
     # self-check for sanity usage
     testcib="$(mktemp)" testcoro="$(mktemp)"
-    { { ${PYTHONEXEC} run-dev ccs2pcs --dist redhat,7.1,Maipo \
-	                              "${@}" -- - - "${testcib}" \
+    { { ${PYTHONEXEC} run-dev --dist redhat,7.1,Maipo \
+                              ccs2pcs "${@}" -- - - "${testcib}" \
         | grep -Ev 'key: _NOT_SECRET--' > "${testcoro}"; } \
     && echo "TEST: execution OK" \
     || { echo "TEST: execution FAIL"; ret=20; }; }<<EOF
@@ -104,6 +104,9 @@ EOF
           <instance_attributes id="RESOURCE-ip-192.168.0.128-ATTRS">
             <nvpair id="RESOURCE-ip-192.168.0.128-ATTRS-ip" name="ip" value="192.168.0.128"/>
           </instance_attributes>
+          <operations>
+            <op id="RESOURCE-ip-192.168.0.128-OP-monitor" name="monitor" interval="20s"/>
+          </operations>
         </primitive>
         <!-- mimic NOFAILBACK failoverdomain (FAILOVERDOMAIN-failover_domain1)-->
         <meta_attributes id="SERVICE-mm-META-ATTRS-nofailback">
@@ -170,8 +173,9 @@ EOF
 run_check_cmd() {
     # self-check for sanity usage
     testcmd="$(mktemp)"
-    { ${PYTHONEXEC} run-dev ccs2pcscmd --dist redhat,7.1,Maipo \
-	                                 "${@}" -sg -- - "${testcmd}" \
+    { ${PYTHONEXEC} run-dev --dist redhat,7.1,Maipo \
+                            ccs2pcscmd "${@}" -sg -- - - \
+			    | tail -n+2 > "${testcmd}" \
       && echo "TEST: execution OK" \
       || { echo "TEST: execution FAIL"; ret=20; }; }<<EOF
 <?xml version="1.0"?>
@@ -217,25 +221,34 @@ EOF
     { diff -u -- - "${testcmd}" \
       && echo "TEST: cmd diff OK" \
       || { echo "TEST: cmd diff FAIL"; ret=21; }; }<<EOF
+# invoked as: ['run-dev', '--dist', 'redhat,7.1,Maipo', 'ccs2pcscmd',
+# '-sg', '--', '-', '-']
+# targeting system: ('linux', 'redhat', '7.1', 'Maipo')
 pcs cluster auth rhel6-node1 rhel6-node2
-pcs cluster setup --start --name rhel6-node1 rhel6-node2 \\
-  --consensus 12000 --token 10000 --join 60
-sleep 60
-pcs cluster cib tmp-cib.xml --config
+pcs cluster setup --name one rhel6-node1 rhel6-node2 --consensus 12000 \\
+  --token 10000 --join 60
+pcs cluster start --all && sleep 60
+pcs cluster cib tmp-cib.xml
+pcs -f tmp-cib.xml stonith create FENCEDEV-xvm fence_xvm \\
+  pcmk_host_map=rhel6-node1:rhel6-node1,rhel6-node2:rhel6-node2
 pcs -f tmp-cib.xml \\
-  stonith create FENCEDEV-xvm fence_xvm pcmk_host_map rhel6-node1:rhel6-node1,rhel6-node2:rhel6-node2
-pcs -f tmp-cib.xml \\
-  resource create RESOURCE-ip-192.168.0.128 ocf:heartbeat:IPaddr2 ip 192.168.0.128
+  resource create RESOURCE-ip-192.168.0.128 ocf:heartbeat:IPaddr2 \\
+  ip=192.168.0.128 op monitor interval=20s
 pcs -f tmp-cib.xml \\
   resource group add SERVICE-mm-GROUP RESOURCE-ip-192.168.0.128
 pcs -f tmp-cib.xml \\
-  constraint location SERVICE-mm-GROUP rule id constraint-id score INFINITY constraint-id=CONSTRAINT-LOCATION-SERVICE-mm-GROUP score=INFINITY #uname eq rhel6-node1
+  constraint location SERVICE-mm-GROUP rule \\
+  id=CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node1 \\
+  constraint-id=CONSTRAINT-LOCATION-SERVICE-mm-GROUP score=INFINITY \\
+  '#uname' eq rhel6-node1
 pcs -f tmp-cib.xml \\
-  constraint rule add CONSTRAINT-LOCATION-SERVICE-mm-GROUP id score INFINITY score=INFINITY #uname eq rhel6-node2
-pcs \\
-  -f tmp-cib.xml constraint rule add CONSTRAINT-LOCATION-SERVICE-mm-GROUP id score \\
-  -INFINITY score=-INFINITY \\
-  #uname ne rhel6-node1 #uname ne rhel6-node2
+  constraint rule add CONSTRAINT-LOCATION-SERVICE-mm-GROUP \\
+  id=CONSTRAINT-LOCATION-SERVICE-mm-GROUP-rhel6-node2 score=INFINITY \\
+  '#uname' eq rhel6-node2
+pcs -f tmp-cib.xml \\
+  constraint rule add CONSTRAINT-LOCATION-SERVICE-mm-GROUP \\
+  id=CONSTRAINT-LOCATION-SERVICE-mm-GROUP-RESTRICTED score=-INFINITY \\
+  '#uname' ne rhel6-node1 and '#uname' ne rhel6-node2
 pcs cluster cib-push tmp-cib.xml --config
 EOF
     rm -f -- "${testcmd}"
@@ -243,4 +256,4 @@ EOF
     return ${ret}
 }
 
-[ "${1}" = "__norun__" ] || { run_check "$@"; run_check_cmd "$@"; }
+[ "${NORUN:-0}" -ne 0 ] || { run_check "$@"; run_check_cmd "$@"; }

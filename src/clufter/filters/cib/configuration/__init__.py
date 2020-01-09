@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -142,14 +142,27 @@ cibcompact2cib = ('''\
                                     <rule id="CONSTRAINT-LOCATION-{$Resource/@id}-RESTRICTED"
                                           boolean-op="and"
                                           score="-INFINITY">
-                                        <xsl:for-each select="$FailoverDomain/meta_attributes/nvpair[
-                                                                  starts-with(@name, 'failoverdomainnode-')
-                                                              ]">
-                                            <expression id="CONSTRAINT-LOCATION-{$Resource/@id}-RESTRICTED-{@value}-expr"
-                                                        attribute="#uname"
-                                                        operation="ne"
-                                                        value="{@value}"/>
-                                        </xsl:for-each>
+                                        <xsl:choose>
+                                            <xsl:when test="$FailoverDomain/meta_attributes/nvpair[
+                                                                starts-with(@name, 'failoverdomainnode-')
+                                                            ]">
+                                                <xsl:for-each select="$FailoverDomain/meta_attributes/nvpair[
+                                                                          starts-with(@name, 'failoverdomainnode-')
+                                                                      ]">
+                                                    <expression id="CONSTRAINT-LOCATION-{$Resource/@id}-RESTRICTED-{@value}-expr"
+                                                                attribute="#uname"
+                                                                operation="ne"
+                                                                value="{@value}"/>
+                                                </xsl:for-each>
+                                            </xsl:when>
+                                            <xsl:otherwise>
+                                                <!-- see filters/ccs-revitalize[failoverdomains]:
+                                                     warn on empty restricted failoverdomains -->
+                                                <expression id="CONSTRAINT-LOCATION-{$Resource/@id}-RESTRICTED-all-expr"
+                                                            attribute="#uname"
+                                                            operation="defined"/>
+                                            </xsl:otherwise>
+                                        </xsl:choose>
                                     </rule>
                                 </xsl:if>
                             </rsc_location>
@@ -187,16 +200,20 @@ cib2pcscmd = ('''\
         verbose_inform('"get initial/working CIB: ", $pcscmd_tmpcib')
 ) + '''
         <xsl:value-of select="concat('pcs cluster cib ',
-                                     $pcscmd_tmpcib, ' --config')"/>
+                                     $pcscmd_tmpcib)"/>
         <xsl:value-of select="'%(NL)s'"/>
 ''' + (
         verbose_ec_test
 ) + '''
     </xsl:if>
     <clufter:descent-mix at="crm_config"/>
+    <clufter:descent-mix at="rsc_defaults"/>
+    <clufter:descent-mix at="op_defaults"/>
+    <clufter:descent-mix at="nodes"/>
     <clufter:descent-mix at="resources"/>
     <clufter:descent-mix at="constraints"/>
     <clufter:descent-mix at="fencing-topology"/>
+    <clufter:descent-mix at="alerts"/>
     <xsl:if test="not($pcscmd_dryrun) and $pcscmd_tmpcib">
 ''' + (
         verbose_inform('"push CIB: ", $pcscmd_tmpcib')
@@ -211,3 +228,135 @@ cib2pcscmd = ('''\
 ''') % dict(
     NL=NL,
 )
+
+###
+
+from ....utils_xslt import xslt_is_member, xslt_string_mapping
+
+cib_revitalize_deprecated_props_cluster_rsc = {
+    'default-resource-stickiness': 'resource-stickiness',
+    'is-managed-default':          'is-managed',
+}
+
+cib_revitalize_deprecated_props_cluster_op = {
+    'default-action-timeout': 'timeout',
+}
+
+cib_revitalize_deprecated_props_cluster = \
+    cib_revitalize_deprecated_props_cluster_rsc.keys() \
+    + cib_revitalize_deprecated_props_cluster_op.keys()
+
+cib_revitalize = ('''\
+    <xsl:copy>
+
+    <!-- nested handling of crm_config: drop the innovated nvpairs -->
+    <clufter:descent-mix at="crm_config"/>
+
+    <!-- move deprecated crm_config properties to rsc_defaults -->
+    <xsl:choose>
+        <xsl:when test="crm_config/cluster_property_set/nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_rsc)
+) + ''']">
+            <rsc_defaults>
+                <xsl:apply-templates select="rsc_defaults/nvpair"/>
+                <xsl:for-each select="crm_config/cluster_property_set[nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_rsc)
+) + ''']]">
+                    <meta_attributes id="{concat(@id, '-', generate-id(.))}">
+                    <!-- XXX make rewrite-id a generalized helper -->
+                    <!-- xsl:if test="rule">
+                        <xsl:call-template name="rewrite-id">
+                            <xsl:with-param name="Elem" select="rule"/>
+                            <xsl:with-param name="InstanceId" select="generate-id(rule)"/>
+                        </xsl:call-template>
+                    </xsl:if -->
+                    <xsl:for-each select="nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_rsc)
+) + ''']">
+                        <nvpair id="{concat(@id, '-', generate-id(.))}">
+                            <xsl:attribute name="name">
+                                <xsl:choose>
+''' + (
+                                xslt_string_mapping(cib_revitalize_deprecated_props_cluster_rsc, '@name')
+) + '''
+                                </xsl:choose>
+                            </xsl:attribute>
+                            <xsl:attribute name="value">
+                                <xsl:value-of select="@value"/>
+                            </xsl:attribute>
+                        </nvpair>
+                    </xsl:for-each>
+                    </meta_attributes>
+                    <xsl:apply-templates select="rsc_defaults/score"/>
+                </xsl:for-each>
+            </rsc_defaults>
+        </xsl:when>
+        <xsl:otherwise>
+            <xsl:apply-templates select="rsc_defaults"/>
+        </xsl:otherwise>
+    </xsl:choose>
+
+    <!-- move deprecated crm_config properties to op_defaults -->
+    <xsl:choose>
+        <xsl:when test="crm_config/cluster_property_set/nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_op)
+) + ''']">
+            <op_defaults>
+                <xsl:apply-templates select="op_defaults/nvpair"/>
+                <xsl:for-each select="crm_config/cluster_property_set[nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_op)
+) + ''']]">
+                    <meta_attributes id="{concat(@id, '-', generate-id(.))}">
+                    <!-- XXX make rewrite-id a generalized helper -->
+                    <!-- xsl:if test="rule">
+                        <xsl:call-template name="rewrite-id">
+                            <xsl:with-param name="Elem" select="rule"/>
+                            <xsl:with-param name="InstanceId" select="generate-id(rule)"/>
+                        </xsl:call-template>
+                    </xsl:if -->
+                    <xsl:for-each select="nvpair[
+''' + (
+                             xslt_is_member('@name',
+                                            cib_revitalize_deprecated_props_cluster_op)
+) + ''']">
+                        <nvpair id="{concat(@id, generate-id(.))}">
+                            <xsl:attribute name="name">
+                                <xsl:choose>
+''' + (
+                                xslt_string_mapping(cib_revitalize_deprecated_props_cluster_op)
+) + '''
+                                </xsl:choose>
+                            </xsl:attribute>
+                            <xsl:attribute name="value">
+                                <xsl:value-of select="."/>
+                            </xsl:attribute>
+                        </nvpair>
+                    </xsl:for-each>
+                    </meta_attributes>
+                    <xsl:apply-templates select="op_defaults/score"/>
+                </xsl:for-each>
+            </op_defaults>
+        </xsl:when>
+        <xsl:otherwise>
+            <xsl:apply-templates select="op_defaults"/>
+        </xsl:otherwise>
+    </xsl:choose>
+
+    <xsl:apply-templates select="*[not(
+''' + (
+        xslt_is_member('name()',
+                       ('crm_config', 'rsc_defaults', 'op_defaults'))
+) + ''')]"/>
+
+    </xsl:copy>
+''')

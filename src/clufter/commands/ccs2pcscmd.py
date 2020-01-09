@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """ccs2pcscmd{,-flatiron,-needle} commands"""
@@ -10,20 +10,24 @@ from ..facts import cluster_pcs_flatiron
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cman import PATH_CLUSTERCONF
-from .ccs2pcs import ccsflat2cibfinal_chain
+from ._chains_pcs import ccsflat2pcscmd_chain_exec
+
+from os import isatty
 
 
-@Command.deco(('ccs2ccsflat',
+@Command.deco(('cmd-annotate',
+                                  ('stringiter-combine3',
+                                      ('cmd-wrap'))),
+              ('ccs2ccsflat',
                   ('ccs-disable-rg',
                       ('ccs2ccs-pcmk',
                           ('ccs-version-bump',
                               ('ccspcmk2pcscmd',
-                                  ('stringiter-combine2',
-                                       ('cmd-wrap')))))),
-                  (ccsflat2cibfinal_chain,
-                      ('cib2pcscmd',
-                          ('stringiter-combine2'  # , ('cmd-wrap' ...
-                           )))))
+                                  ('stringiter-combine3'  # , ('cmd-wrap' ...
+                                   ))))),
+                  (ccsflat2pcscmd_chain_exec(
+                                  ('stringiter-combine3'  # , ('cmd-wrap' ...
+                                   )))))
 def ccs2pcscmd_flatiron(cmd_ctxt,
                         input=PATH_CLUSTERCONF,
                         output="-",
@@ -40,12 +44,12 @@ def ccs2pcscmd_flatiron(cmd_ctxt,
     """(CMAN,rgmanager) cluster cfg. -> equivalent in pcs commands
 
     Options:
-        input       input (CMAN,rgmanager) cluster config. file
+        input       input (CMAN,rgmanager) cluster configuration file
         output      pcs commands to reinstate the cluster per the inputs
         force       may the force be with emitted pcs commands
         noauth      skip authentication step (OK if already set up)
         silent      do not track the progress along the steps execution (echoes)
-        tmp_cib     file to accumulate the changes (empty ~ direct push)
+        tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
         enable      enable cluster infrastructure services (autostart on reboot)
         start_wait  fixed seconds to give cluster to come up initially
@@ -61,51 +65,62 @@ def ccs2pcscmd_flatiron(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+    # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
         (
+            void_proto(),
             (
-                (
-                    (
-                        (
-                            (
-                                file_proto(output),
-                            ),
-                        ),
-                    ),
-                ),
+                                                (
+                                                    file_proto(output),
+                                                ),
             ),
+            file_proto(input),
+            # already tracked
             #(
             #    (
             #        (
             #            (
             #                (
-            #                    (
-            #                        (
-            #                            file_proto(output),  # already tracked
-            #                        ),
-            #                    ),
+            #                                    (
+            #                                        file_proto(output),
+            #                                    ),
             #                ),
             #            ),
             #        ),
             #    ),
+            #    # already tracked
+            #    #ccsflat2pcscmd_output(
+            #    #                                (
+            #    #                                    file_proto(output),
+            #    #                                ),
+            #    #),
             #),
         ),
     )
 
 
-@Command.deco(('ccs2ccsflat',
+@Command.deco(('cmd-annotate',
+                              ('stringiter-combine4',
+                                  ('cmd-wrap'))),
+              ('ccs2ccsflat',
                   ('ccs-propagate-cman',
                       ('ccs2needlexml',
                           ('needlexml2pcscmd',
-                              ('stringiter-combine2',
-                                   ('cmd-wrap'))))),
-                  (ccsflat2cibfinal_chain,
-                      ('cib2pcscmd',
-                          ('stringiter-combine2'  # , ('cmd-wrap' ...
-                           )))))
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )),
+                          ('needleqdevicexml2pcscmd',
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )))),
+                  (ccsflat2pcscmd_chain_exec(
+                              ('stringiter-combine4'  # , ('cmd-wrap' ...
+                               )))))
 def ccs2pcscmd_needle(cmd_ctxt,
                       input=PATH_CLUSTERCONF,
                       output="-",
@@ -127,7 +142,7 @@ def ccs2pcscmd_needle(cmd_ctxt,
         force       may the force be with emitted pcs commands
         noauth      skip authentication step (OK if already set up)
         silent      do not track the progress along the steps execution (echoes)
-        tmp_cib     file to accumulate the changes (empty ~ direct push)
+        tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
         enable      enable cluster infrastructure services (autostart on reboot)
         start_wait  fixed seconds to give cluster to come up initially
@@ -143,34 +158,45 @@ def ccs2pcscmd_needle(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+    # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
         (
+            void_proto(),
             (
-                (
-                    (
-                        (
-                            file_proto(output),
-                        ),
-                    ),
-                ),
+                                                (
+                                                    file_proto(output),
+                                                ),
             ),
+            file_proto(input),
             #(
             #    (
             #        (
-            #            (
-            #                (
-            #                    (
-            #                        (
-            #                            file_proto(output),  # already tracked
-            #                        ),
-            #                    ),
-            #                ),
-            #            ),
+            #                                (
+            #                                    (
+            #                                        file_proto(output),
+            #                                    ),
+            #                                ),
+            #            # already tracked
+            #            #                    (
+            #            #                        (
+            #            #                            file_proto(output),
+            #            #                        ),
+            #            #                    ),
             #        ),
             #    ),
+            #    # already tracked
+            #    #ccsflat2pcscmd_output(
+            #    #                                (
+            #    #                                    file_proto(output),
+            #    #                                ),
+            #    #),
             #),
         ),
     )

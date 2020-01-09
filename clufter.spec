@@ -1,10 +1,10 @@
 Name:           clufter
-Version:        0.50.4
-Release:        1%{?dist}
+Version:        0.59.5
+Release:        2%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
 License:        GPLv2+
-URL:            https://github.com/jnpkrn/%{name}
+URL:            https://pagure.io/%{name}
 
 # required for autosetup macro
 BuildRequires:  git
@@ -13,7 +13,18 @@ BuildRequires:  python2-devel
 BuildRequires:  python-setuptools
 BuildRequires:  python-lxml
 
+%global test_version 0.59.1
+%global testver      %{?test_version}%{?!test_version:%{version}}
+
 Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{version}.tar.gz
+Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
+Source2:        https://pagure.io/clufter/raw/v${version}/f/misc/fix-jing-simplified-rng.xsl
+Patch0:         main-make-the-help-screen-more-help2html-friendly.patch
+
+# for pacemaker BuildRequires dependency
+%if 0%{?rhel} > 0
+ExclusiveArch: i686 x86_64 s390x
+%endif
 
 %description
 While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
@@ -48,6 +59,15 @@ Summary:        Library for transforming/analyzing cluster configuration formats
 License:        GPLv2+ and GFDL
 
 BuildRequires:  pkgconfig(libxml-2.0)
+
+# needed for schemadir path pointer
+BuildRequires:  pkgconfig(pacemaker)
+# needed for schemas themselves
+BuildRequires:  pacemaker
+# needed to squash multi-file schemas to single file
+BuildRequires:  jing
+# needed for xsltproc and xmllint respectively
+BuildRequires:  libxslt libxml2
 
 Requires:       python-lxml
 Requires:       %{_bindir}/nano
@@ -96,7 +116,11 @@ configuration: either experimental commands or internally unused, reusable
 formats and filters.
 
 %prep
-%autosetup -p1 -S git
+%autosetup -p1 -S git -b 1
+
+%if "%{testver}" != "%{version}"
+    %{__cp} -a ../"%{name}-%{testver}"/* .
+%endif
 
 ## for some esoteric reason, the line above has to be empty
 %{__python2} setup.py saveopts -f setup.cfg pkg_prepare \
@@ -104,15 +128,82 @@ formats and filters.
                       --editor='%{_bindir}/nano' \
                       --ra-metadata-dir='%{_datadir}/cluster' \
                       --ra-metadata-ext='metadata'
+%{__python} setup.py saveopts -f setup.cfg pkg_prepare \
+--report-bugs='https://bugzilla.redhat.com/enter_bug.cgi?product=Red%20Hat%20Enterprise%20Linux%207&component=clufter'
+# make Python interpreter executation sane (via -Es flags)
+%{__python2} setup.py saveopts -f setup.cfg build_scripts \
+                      --executable='%{__python2} -Es'
 
 %build
 %{__python2} setup.py build
 ./run-dev --skip-ext --completion-bash 2>/dev/null \
   | sed 's|run[-_]dev|%{name}|g' > .bashcomp
+# generate man pages (proper commands and aliases from a sorted sequence)
 %{__mkdir_p} -- .manpages/man1
-help2man -N -h -H -n "$(sed -n '2s|[^(]\+(\([^)]\+\))|\1|p' README)" ./run-dev \
-  | sed 's|run[-_]dev|%{name}|g' \
-  > .manpages/man1/%{name}.1
+{ echo; ./run-dev -l | sed -n 's|^  \(\S\+\).*|\1|p' | sort; } > .subcmds
+sed -e 's:\(.\+\):\\\&\\fIrun_dev-\1\\fR\\\|(1), :' \
+  -e '1s|\(.*\)|\[SEE ALSO\]\n|' \
+  -e '$s|\(.*\)|\1\nand perhaps more|' \
+  .subcmds > .see-also
+help2man -N -h -H -i .see-also \
+  -n "$(sed -n '2s|[^(]\+(\([^)]\+\))|\1|p' README)" ./run-dev \
+  | sed 's|run\\\?[-_]dev|%{name}|g' \
+  > ".manpages/man1/%{name}.1"
+while read cmd; do
+  [ -n "${cmd}" ] || continue
+  echo -e "#\!/bin/sh\n{ [ \$# -ge 1 ] && [ \"\$1\" = \"--version\" ] \
+  && ./run-dev \"\$@\" || ./run-dev \"${cmd}\" \"\$@\"; }" > ".tmp-${cmd}"
+  chmod +x ".tmp-${cmd}"
+  grep -v "^${cmd}\$" .subcmds \
+    | grep -e '^$' -e "$(echo ${cmd} | cut -d- -f1)\(-\|\$\)" \
+    | sed -e 's:\(.\+\):\\\&\\fIrun_dev-\1\\fR\\\|(1), :' \
+      -e '1s|\(.*\)|\[SEE ALSO\]\n\\\&\\fIrun_dev\\fR\\\|(1), \n|' \
+      -e '$s|\(.*\)|\1\nand perhaps more|' > .see-also
+  # XXX uses ";;&" bashism
+  case "${cmd}" in
+  ccs[2-]*)
+    sed -i \
+      '1s:\(.*\):\1\n\\\&\\fIcluster.conf\\fR\\\|(5), \\\&\\fIccs\\fR\\\|(7), :' \
+    .see-also
+    ;;&
+  ccs2pcs*)
+    sed -i \
+      '1s:\(.*\):\1\n\\\&\\fI%{_defaultdocdir}/%{name}-%{version}/rgmanager-pacemaker\\fR\\\|, :' \
+    .see-also
+    ;;&
+  *[2-]pcscmd*)
+    sed -i '1s:\(.*\):\1\n\\\&\\fIpcs\\fR\\\|(8), :' .see-also
+    ;;&
+  esac
+  help2man -N -h -H -i .see-also -n "${cmd}" "./.tmp-${cmd}" \
+    | sed 's|run\\\?[-_]dev|%{name}|g' \
+  > ".manpages/man1/%{name}-${cmd}.1"
+done < .subcmds
+
+schemadir=$(pkg-config --variable schemadir pacemaker)
+%{__mkdir_p} -- .schemas
+for f in "${schemadir}"/pacemaker-*.*.rng; do
+    test -f "${f}" || continue
+    base="$(basename "${f}")"
+    case "${base}" in
+    pacemaker-1.0.rng|pacemaker-2.[12].rng)
+        continue;;  # skip non-defaults of upstream releases (avoid clutter)
+    esac
+    sentinel=10; old=; new="${f}"
+    while [ "$(stat -c '%%s' "${old}")" != "$(stat -c '%%s' "${new}")" ]; do
+        [ "$((sentinel -= 1))" -gt 0 ] || break
+        [ "${old}" = "${f}" ] && old=".schemas/${base}";
+        [ "${new}" = "${f}" ] \
+          && { old="${f}"; new=".schemas/${base}.new"; } \
+          || %{__cp} -f "${new}" "${old}"
+        jing -is "${old}" > "${new}"
+    done
+    # xmllint drops empty lines caused by the applied transformation
+    xsltproc --stringparam filename-or-version "${base}" \
+      "%{SOURCE2}" "${new}" \
+      | xmllint --format - > "${old}"
+    %{__rm} -f -- "${new}"
+done
 
 %install
 
@@ -120,6 +211,10 @@ help2man -N -h -H -n "$(sed -n '2s|[^(]\+(\([^)]\+\))|\1|p' README)" ./run-dev \
 %{__python2} setup.py install --skip-build --root '%{buildroot}'
 # following is needed due to umask 022 not taking effect(?) leading to 775
 %{__chmod} -- g-w '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten'
+# fix excessive script interpreting "executable" quoting with old setuptools:
+# https://github.com/pypa/setuptools/issues/188
+# https://bugzilla.redhat.com/1353934
+sed -i '1s|^\(#!\)"\(.*\)"$|\1\2|' '%{buildroot}%{_bindir}/%{name}'
 # %%{_bindir}/%%{name} should have been created
 test -f '%{buildroot}%{_bindir}/%{name}' \
   || %{__install} -D -pm 644 -- '%{buildroot}%{_bindir}/%{name}' \
@@ -147,10 +242,12 @@ cat >.bashcomp-files <<-EOF
 	%verify(not size md5 mtime) %{_sysconfdir}/%{name}/bash-completion
 EOF
 %{__mkdir_p} -- '%{buildroot}%{_mandir}'
-%{__cp} -a -- .manpages/* '%{buildroot}%{_mandir}'
+%{__cp} -a -t '%{buildroot}%{_mandir}' -- .manpages/*
+%{__cp} -a -f -t '%{buildroot}%{python2_sitelib}/%{name}/formats/cib' \
+              -- .schemas/pacemaker-*.*.rng
 %{__mkdir_p} -- '%{buildroot}%{_defaultdocdir}/%{name}-%{version}'
-%{__install} -pm 644 -- gpl-2.0.txt doc/*.txt \
-                        '%{buildroot}%{_defaultdocdir}/%{name}-%{version}'
+%{__cp} -a -t '%{buildroot}%{_defaultdocdir}/%{name}-%{version}' \
+           -- gpl-2.0.txt doc/*.txt doc/rgmanager-pacemaker
 
 %check
 # just a basic sanity check
@@ -160,7 +257,7 @@ declare ret=0 \
         ccs_flatten_dir="$(dirname '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten')"
 ln -s '%{buildroot}%{_datadir}/cluster'/*.'metadata' \
       "${ccs_flatten_dir}"
-PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-check
+PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-tests
 ret=$?
 %{__rm} -f -- "${ccs_flatten_dir}"/*.'metadata'
 [ ${ret} -eq 0 ] || exit ${ret}
@@ -195,10 +292,12 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{python2_sitelib}/%{name}/__main__.py*
 %{python2_sitelib}/%{name}/main.py*
 %{python2_sitelib}/%{name}/completion.py*
+# only useful here, rest of egg-info pulled through internal dependency
+%{python2_sitelib}/%{name}-*.egg-info/entry_points.txt
 
 %files -n python-%{name}
 %dir %{_defaultdocdir}/%{name}-%{version}
-%{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]].txt
+%{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]]
 %license %{_defaultdocdir}/%{name}-%{version}/*[[:digit:]].txt
 %exclude %{python2_sitelib}/%{name}/__main__.py*
 %exclude %{python2_sitelib}/%{name}/main.py*
@@ -206,6 +305,8 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %exclude %{python2_sitelib}/%{name}/ext-plugins/*/
 %{python2_sitelib}/%{name}
 %{python2_sitelib}/%{name}-*.egg-info
+# entry_points.txt only useful for -cli package
+%exclude %{python2_sitelib}/%{name}-*.egg-info/entry_points.txt
 %{_libexecdir}/%{name}-%{version}
 %{_datadir}/cluster
 
@@ -219,6 +320,46 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{python2_sitelib}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Wed Aug 10 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.5-2
+- fix malformed man pages due to help screen being previously split on hyphens
+
+* Mon Aug 08 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.5-1
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Tue Aug 02 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.4-1
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Fri Jul 29 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.3-1
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Thu Jul 28 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.2-1
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Tue Jul 26 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.1-1
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Fri Jul 22 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.0-1
+- add ability to borrow validation schemas from pacemaker installed along
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Fri Jul 15 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.58.0-1
+- fix Python interpreter propagated as enquoted string with old setuptools
+- bump upstream package, see https://pagure.io/clufter/releases
+
+* Fri Jul 01 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.57.0-1
+- bump upstream package, see https://pagure.io/clufter/releases
+- generate man pages also for offered commands
+- auto-generate SEE ALSO sections for the man pages
+- move entry_points.txt to clufter-cli sub-package
+- general spec file refresh (pagure.io as a default project base, etc.)
+- make Python interpreter execution sane
+- fix *2pcscmd* commands so they do not suggest
+  "pcs cluster cib <file> --config" that doesn't currently
+  work for subsequent local-modification pcs commands
+  [rhbz#1328078]
+- add support for ticket constraints to *2pcscmd commands
+  [rhbz#1340243]
+
 * Wed Sep 09 2015 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.50.4-1
 - bump upstream package
 

@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Machinery entry point"""
@@ -11,20 +11,25 @@ from optparse import OptionParser, \
                      IndentedHelpFormatter
 from os.path import basename, realpath
 from platform import system, linux_distribution
-try:
-    from platform import _supported_dists
-except ImportError:
-    _supported_dists = ()
-_supported_dists += ('fedora', 'redhat')  # actively used in the templates
 from sys import version
 
 from . import version_parts, version_text, description_text
 from .command_manager import CommandManager
 from .completion import Completion
 from .error import EC
-from .facts import aliases_dist
+from .facts import aliases_dist, format_dists, supported_dists
 from .utils import args2sgpl, head_tail, identity
 from .utils_prog import ExpertOption, make_options, set_logging, which
+
+try:
+    from .defaults import REPORT_BUGS
+except ImportError:
+    report_bugs = ()
+else:
+    report_bugs = ("Report bugs to", "<{0}>".format(REPORT_BUGS))
+    joint = ' '.join(report_bugs) + '.'
+    if len(joint) < 70:
+           report_bugs = (joint, )
 
 
 _system = system().lower()
@@ -33,7 +38,7 @@ _system_extra = linux_distribution(full_distribution_name=0) \
 
 
 def parser_callback_help(option, opt_str, value, parser, arg=False, full=False):
-    """Makes 'help' option accept 'optional option arguments'"""
+    """Makes 'help' option accept 'optional option argument'"""
     if arg:
         rargs, val = parser.rargs, ''
         if rargs and not rargs[0].startswith('-'):
@@ -53,7 +58,7 @@ def parser_callback_dist(option, opt_str, value, parser, *args, **kwargs):
     orig_distro, orig_version = head_tail(value.split(',', 1))
     distro = orig_distro
     for fn in (lambda x: x.lower(), lambda x: aliases_dist.get(x, x), identity):
-        if distro in _supported_dists:
+        if distro in supported_dists:
             if distro != orig_distro:
                 parser.values._deferred_log = dl = getattr(parser.values,
                                                            '_deferred_log', [])
@@ -70,6 +75,19 @@ def parser_callback_dist(option, opt_str, value, parser, *args, **kwargs):
                                                            *orig_version)))
 
 
+def parser_callback_list_dists(option, opt_str, value, parser):
+    """Makes 'list-dists' option accept 'optional option argument'"""
+    val = 0
+    rargs = parser.rargs
+    if rargs and rargs[0]:
+        try:
+            val = int(rargs[0])
+            del rargs[:1]
+        except ValueError:
+            pass
+    setattr(parser.values, 'list', 'dists_{0}'.format(val))
+
+
 opts_common = (
     (('--sys', ), dict(
         type='string',  # for dest -> default
@@ -84,7 +102,8 @@ opts_common = (
         action='callback',
         callback=parser_callback_dist,
         default=','.join(_system_extra),
-        help="override autodetected target distro (for SYS ~ linux) [%default]"
+        help="override target distro (for SYS=linux; see --list-dists)"
+             " [%default]"
     )),
     (('-q', '--quiet', ), dict(
         action='store_true',
@@ -144,8 +163,18 @@ opts_main = (
         help="full help message (can be command-specific) and exit"
     )),
     (('-l', '--list'), dict(
-        action='store_true',
+        action='store_const',
+        const='cmds',
         help="list commands and exit"
+    )),
+    (('--list-dists', ), dict(
+        metavar="[VERBOSITY]",
+        type='string',
+        nargs=0,  # <- we take one if suitable
+        action='callback',
+        callback=parser_callback_list_dists,
+        expert=True,
+        help="list explicitly supported --dist option arguments and exit"
     )),
     (('-v', '--version'), dict(
         action='store_true',
@@ -225,6 +254,12 @@ class SharedOptionParser(OptionParser):
         return '\n'.join(formatter.format_description(l)
                          for l in self.get_description().split('\n\n')) \
                + (self.description_raw and '\n' + self.description_raw + '\n')
+
+    def format_epilog(self, formatter):
+        ret = '\n' + '\n'.join(formatter.format_epilog(l).strip('\n')
+                               if '<http' not in l else l
+                               for l in self.epilog.split('\n'))
+        return ret
 
     # custom methods
 
@@ -310,8 +345,23 @@ def run(argv=None, *args):
                                          ' required:' if opts.skip_ext else
                                         ', use --list to get all:'),
                               ellip=opts.skip_ext or not opts.list)
-        if opts.list:
+        if opts.list == 'cmds':
             print cmds
+        elif opts.list and opts.list.startswith('dists_'):
+            verbosity, acc = int(opts.list.split('dists_', 1)[1]), []
+            if verbosity == 0:
+                acc.extend((
+                    "# boundary (or so) versions of what is explicitly"
+                    " supported;",
+                    "# increase verbosity to display more",
+                ))
+            elif verbosity >= 1:
+                acc.extend((
+                    "# spanning, still possibly sparse subset of what is"
+                    " explicitly supported",
+                    "# (all versions any change/update is tracked at)",
+                ))
+            print '\n'.join(acc + [format_dists(verbosity)])
         elif opts.completion:
             c = Completion.get_completion(opts.completion, prog,
                                           opts_common, opts_main, opts_nonmain)
@@ -321,8 +371,11 @@ def run(argv=None, *args):
                 usage="%prog [<global option> ...] [<cmd> [<cmd option ...>]]",
                 description=description_text(width=0),
                 description_raw=cmds,
-                epilog=("To get help for given command,"
-                        " just precede or follow it with `--help'.")
+                epilog='\n'.join(args2sgpl(
+                    "To get help for given command, just precede or follow"
+                    " it with `--help'.",
+                    *report_bugs
+                ))
             )
         return ec
     elif prog_simple != prog_real:
@@ -335,18 +388,18 @@ def run(argv=None, *args):
     modify_group.set_title("Command options")
     modify_group.set_description(None)
     parser.add_options(make_options(opts_nonmain))
-    parser.epilog = ("Arguments to value-based `command options' can go"
-                     " without labels when the order wrt. parsing logic"
-                     " respected;"
-                     " skipping those backed by default values otherwise"
-                     " requiring specification then allowed by syntactic"
-                     " sugar: all can be passed as a single, first,"
-                     " ::-delimited argument;"
-                     " magic files: `-', `@DIGIT+'."
-                     " `{{formula}}' in output file spec: input-backed"
-                     " (e.g. hash) substitution recipe."
-                     "  All available commands listed as `{0} --list'."
-                     .format(prog_simple))
+    parser.epilog = '\n'.join(args2sgpl(
+        "Arguments to value-based `command options' can go without labels"
+        " when the order wrt. parsing logic respected;"
+        " skipping those backed by default values otherwise requiring"
+        " specification then allowed by syntactic sugar: all can be passed"
+        " as a single, first, ::-delimited argument;"
+        " magic files: `-', `@DIGIT+'. `{{formula}}' in output file spec:"
+        " input-backed (e.g. hash) substitution recipe."
+        "  All available commands listed as `{0} --list'."
+        .format(prog_simple),
+        *report_bugs
+    ))
     #try:
     # note that the parser carries opts and "Common options" group
     ec = cm(parser, args)

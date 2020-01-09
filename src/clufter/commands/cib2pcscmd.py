@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """cib2pcscmd command"""
@@ -9,9 +9,17 @@ from ..command import Command
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cib import PATH_CIB
+from ._chains_pcs import cib2pcscmd_chain_exec, cib2pcscmd_output
+
+from os import isatty
 
 
-@Command.deco('cib2pcscmd')
+@Command.deco(('cmd-annotate',
+                  ('stringiter-combine2',
+                      ('cmd-wrap'))),
+              (cib2pcscmd_chain_exec(
+                  ('stringiter-combine2'  # , ('cmd-wrap' ...
+                   ))))
 def cib2pcscmd(cmd_ctxt,
                input=PATH_CIB,
                output="-",
@@ -26,12 +34,12 @@ def cib2pcscmd(cmd_ctxt,
     """CIB -> equivalent in pcs commands
 
     Options:
-        input       input (CMAN,rgmanager) cluster config. file
+        input       input proper Pacemaker cluster configuration file (CIB)
         output      pcs commands to reinstate the cluster per the inputs
         force       may the force be with emitted pcs commands
         noauth      skip authentication step (OK if already set up)
         silent      do not track the progress along the steps execution (echoes)
-        tmp_cib     file to accumulate the changes (empty ~ direct push)
+        tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
         enable      enable cluster infrastructure services (autostart on reboot)
         text_width  for commands rewrapping (0/-1/neg. ~ auto/disable/hi-limit)
@@ -43,9 +51,28 @@ def cib2pcscmd(cmd_ctxt,
     cmd_ctxt['pcscmd_dryrun'] = dry_run
     cmd_ctxt['pcscmd_enable'] = enable
     cmd_ctxt['text_width'] = text_width
+    # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
-        file_proto(input),
-        file_proto(output),
+        (
+            void_proto(),
+            (
+                    (
+                        file_proto(output),
+                    ),
+            ),
+            file_proto(input),
+            # already tracked
+            #cib2pcscmd_output(
+            #        (
+            #            file_proto(output),
+            #        ),
+            #),
+        ),
     )

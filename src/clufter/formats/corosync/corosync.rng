@@ -17,6 +17,9 @@
           <ref name="resources"/>
         </optional>
         <optional>
+          <ref name="qb"/>
+        </optional>
+        <optional>
           <ref name="quorum"/>
         </optional>
         <ref name="totem"/>
@@ -95,6 +98,7 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -106,7 +110,18 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
 that will be used for any messages sent to syslog.</a:documentation>
         
         <choice>
+          <value>auth</value>
+          <value>authpriv</value>
+          <value>cron</value>
           <value>daemon</value>
+          <value>ftp</value>
+          <value>kern</value>
+          <value>lpr</value>
+          <value>mail</value>
+          <value>news</value>
+          <value>syslog</value>
+          <value>user</value>
+          <value>uucp</value>
           <value>local0</value>
           <value>local1</value>
           <value>local2</value>
@@ -129,6 +144,7 @@ is the same as *debug* is 'on'.</a:documentation>
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -160,6 +176,8 @@ use `logrotate(8)` with the option `copytruncate`, e.g.
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -170,6 +188,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -180,6 +200,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -230,6 +252,7 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -241,7 +264,18 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
 that will be used for any messages sent to syslog.</a:documentation>
         
         <choice>
+          <value>auth</value>
+          <value>authpriv</value>
+          <value>cron</value>
           <value>daemon</value>
+          <value>ftp</value>
+          <value>kern</value>
+          <value>lpr</value>
+          <value>mail</value>
+          <value>news</value>
+          <value>syslog</value>
+          <value>user</value>
+          <value>uucp</value>
           <value>local0</value>
           <value>local1</value>
           <value>local2</value>
@@ -264,6 +298,7 @@ is the same as *debug* is 'on'.</a:documentation>
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -295,6 +330,8 @@ use `logrotate(8)` with the option `copytruncate`, e.g.
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -305,6 +342,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -315,6 +354,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -390,6 +431,29 @@ as denoted by its number (instead 0, there can be higher numbers).</a:documentat
       
     </element>
   </define>
+  <define name="qb">
+    <element name="qb">
+      <a:documentation>In this configuration section, one can
+specify options for libqb.</a:documentation>
+      <group>
+        <optional>
+          <attribute name="ipc_type">
+            <a:documentation>This specifies type of IPC to use.
+Can be one of 'native' (default), 'shm' and 'socket'.  'Native'
+means one of 'shm' or 'socket', depending on what is supported
+by OS.  On systems with support for both, 'SHM' is selected.
+'SHM' is generally faster, but need to allocate ring buffer
+file in /dev/shm.</a:documentation>
+            <choice>
+              <value>native</value>
+              <value>shm</value>
+              <value>socket</value>
+            </choice>
+          </attribute>
+        </optional>
+      </group>
+    </element>
+  </define>
   <define name="quorum">
     <element name="quorum">
       <a:documentation>In this configuration section, one can
@@ -418,11 +482,30 @@ adjust quorum.</a:documentation>
           </attribute>
         </optional>
         <optional>
+          <attribute name="auto_tie_breaker_node" a:defaultValue="lowest">
+            <a:documentation>This further configures Auto Tie Breaker feature
+(see `votequorum(5)`).</a:documentation>
+            <data type="string">
+              <param name="pattern">lowest|highest|\d+(\D+\d+)*</param>
+            </data>
+          </attribute>
+        </optional>
+        <optional>
           <attribute name="expected_votes">
             <a:documentation>This specifies the number of expected votes, overriding the number
 implied by the number of *node* items within *nodes*.</a:documentation>
             
             <data type="unsignedInt"/>
+          </attribute>
+        </optional>
+        <optional>
+          <attribute name="expected_votes_tracking" a:defaultValue="0">
+            <a:documentation>This enables Expected Votes Tracking feature
+(see `votequorum(5)`).</a:documentation>
+            <choice>
+              <value>0</value>
+              <value>1</value>
+            </choice>
           </attribute>
         </optional>
         <optional>
@@ -481,9 +564,129 @@ As of now, only 'corosync_votequorum' is supported.</a:documentation>
           </attribute>
         </optional>
       </group>
+      <optional>
+        <element name="device">
+          <a:documentation>In this configuration section, one can
+adjust quorum device, that is, selecte the type of the arbitrator
+(model) together with generic and model-specific parameters
+(see `corosync-qdevice(5)`).</a:documentation>
+          <optional>
+            <attribute name="sync_timeout" a:defaultValue="30000">
+              <a:documentation>Specifies how often corosync-qdevice should
+call the votequorum_poll function during a sync phase.  It is recommended
+that you don't change this value (see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedInt"/>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="timeout" a:defaultValue="10000">
+              <a:documentation>Specifies how often should corosync-qdevice
+call the votequorum_poll function.  It is also used by the net model to
+adjust its hearbeat timeout.  It is recommended that you don't change
+this value (see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedInt"/>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="votes">
+              <a:documentation>The number of votes provided to the
+cluster by qdevice.  Default is (number_of_nodes -  1) or generally
+sum(votes_per_node) - 1 (see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedInt"/>
+            </attribute>
+          </optional>
+          <ref name="qdevice-net"/>
+        </element>
+      </optional>
     </element>
   </define>
-  
+
+  <define name="qdevice-net">
+    <group>
+      <attribute name="model">
+        <a:documentation>This specifies what type of arbitrator
+is used to maintain quorum (see `corosync-qdevice(5)`).
+As of now, only 'net' is supported.</a:documentation>
+        <value>net</value>
+      </attribute>
+      <element name="net">
+        <group>
+          <optional>
+            <attribute name="algorithm" a:defaultValue="ffsplit">
+              <a:documentation>Decision algorithm.  Can be one of
+'ffsplit' or 'lms'.  (actually there are also 'test' and '2nodelms',
+both of which are mainly for developers and shouldn't be used for
+production clusters; see `corosync-qdevice(5)`).</a:documentation>
+              <choice>
+                <value>2nodelms</value>
+                <value>ffsplit</value>
+                <value>lms</value>
+                <value>test</value>
+              </choice>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="connect_timeout">
+              <a:documentation>Timeout when corosync-qdevice is trying to
+connect to corosync-qnetd host (see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedInt"/>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="force_ip_version" a:defaultValue="0">
+              <a:documentation>Forces the software to use the given IP
+version.  '0' means IPv6 is prefered and IPv4 should be used as a fallback
+(see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedInt"/>
+            </attribute>
+          </optional>
+          <attribute name="host">
+            <a:documentation>Specifies the IP address or host name of the
+qnetd server to be used (see `corosync-qdevice(5)`).</a:documentation>
+          </attribute>
+          <optional>
+            <attribute name="port" a:defaultValue="5403">
+              <a:documentation>Specifies TCP port of qnetd server
+(see `corosync-qdevice(5)`).</a:documentation>
+              <data type="unsignedShort"/>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="tie_breaker" a:defaultValue="lowest">
+              <a:documentation>It's used as a fallback if qdevice has
+to decide between two or more equal partitions.  'lowest' means the
+partition with the lowest node id is chosen.  'highest' means the
+partition with highest node id is  chosen.  And specifying valid
+node id means that the partition containing the node with the given
+node id is chosen (see `corosync-qdevice(5)`).</a:documentation>
+              <data type="string">
+                <param name="pattern">lowest|highest|\d+</param>
+              </data>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="tls" a:defaultValue="on">
+              <a:documentation>Can be one of 'on', 'off' or 'required'
+and specifies if tls should be used.  'on' means a connection with
+TLS is attempted first, but if the server doesn't advertise TLS
+support then non-TLS will be used.  'off' is used then TLS is not
+required and it's then not even tried.  This mode is the only one
+which  doesn't need a properly initialized NSS  database.
+'required' means TLS is required and if the server doesn't support
+TLS, qdevice will exit with error message
+(see `corosync-qdevice(5)`).</a:documentation>
+              <choice>
+                <value>on</value>
+                <value>off</value>
+                <value>required</value>
+              </choice>
+            </attribute>
+          </optional>
+        </group>
+      </element>
+    </group>
+  </define>
+
   <define name="load_15min">
     <element name="load_15min">
       <optional>

@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Format representing merged/isolated (1/2 levels) of single command to exec"""
@@ -10,13 +10,32 @@ try:
 except ImportError:
     from ordereddict import OrderedDict
 from logging import getLogger
+from shlex import split
 
 log = getLogger(__name__)
 
 from ..format import SimpleFormat
 from ..protocol import Protocol
 from ..utils import head_tail
-from ..utils_func import apply_intercalate
+from ..utils_func import add_item, apply_intercalate, apply_partition
+
+# man bash | grep -A2 '\s\+metacharacter$'
+_META_CHARACTERS =  '|', '&', ';', '(', ')', '<', '>' , ' ', '\t'
+# man bash | grep -A2 '\s\+control operator$' (minus <newline>)
+_CONTROL_OPERATORS = '||', '&', '&&', ';', ';;', '(', ')', '|', '|&'  # , '\n'
+# man bash | grep -A4 '^RESERVED WORDS$' | tail -n1
+_RESERVED_WORDS = ('!', 'case', 'coproc', 'do', 'done', 'elif', 'else', 'esac',
+                   'fi', 'for', 'function', 'if', 'in', 'select', 'then',
+                   'until', 'while', '{', '}', 'time', '[[', ']]')
+
+_META_WORDS = _CONTROL_OPERATORS + _RESERVED_WORDS
+
+ismetaword = \
+    lambda x: \
+    x in _META_WORDS \
+        or x.endswith('(') and x[-2:-1] in '$<' \
+            and x[:-2].rstrip(' \t') in ('', '"') \
+        or x.startswith(')') and x[1:].lstrip(' \t') in ('', '"')
 
 
 class command(SimpleFormat):
@@ -28,21 +47,29 @@ class command(SimpleFormat):
     @staticmethod
     def _escape(base, qs=("'", '"')):
         # rule: last but one item in qs cannot be escaped inside enquotion
+        # XXX: escaping _META_CHARACTERS
         ret = []
         for b in base:
-            if ' ' in b or any(b.startswith(q) or b.endswith(q) for q in qs):
-                use_q = ''
-                for q in qs:
-                    if q not in b:
-                        use_q = q
-                        break
-                else:
-                    use_q = qs[-1]
-                    if use_q != qs[0]:
-                        b = b.replace(use_q, '\\' + use_q)
+            if any(c in b for c in qs + tuple(' \t#$')):
+                use_q, prologue, epilogue = ('', ) * 3
+                if not(b.endswith('(') and b[-2:-1] in '$<'
+                       and b[:-2].rstrip(' \t') in ('', '"')
+                       or
+                       b.startswith(')') and b[1:].lstrip(' \t') in ('', '"')):
+                    if b.startswith('<<<'):
+                        _, prologue, b = b.partition('<<<')
+                    use_qs = tuple(c for c in qs if c != "'") if '$' in b else qs
+                    for q in use_qs:
+                        if q not in b:
+                            use_q = q
+                            break
                     else:
-                        raise RuntimeError('cannot quote the argument')
-                b = b.join((use_q, use_q))
+                        use_q = use_qs[-1]
+                        if use_q != qs[0]:
+                            b = b.replace(use_q, '\\' + use_q)
+                        else:
+                            raise RuntimeError('cannot quote the argument')
+                b = b.join((use_q, use_q)).join((prologue, epilogue))
             ret.append(b)
         return ret
 
@@ -56,37 +83,94 @@ class command(SimpleFormat):
     def get_separated(self, *protodecl):
         merged = self.MERGED()
         merged.reverse()
-        ret, acc = [], []
+        ret, acc, takes = [], [], 2  # by convention, option takes at most 1 arg
         while merged:
             i = merged.pop()
-            if acc == ['--'] or i is None or i.startswith('-') and i != '-':
-                if acc:
+            # treat `-OPT` followed with `-NUMBER` just as if it was `NUMBER`,
+            # also add an extra split on "meta words"
+            if acc == ['--'] or i is None or ismetaword(i) \
+                    or i.startswith('-') and i != '-' and not i[1:].isdigit():
+                if not acc:
+                    pass
+                elif acc[0].startswith('-'):
+                    ret.extend(filter(bool, (tuple(acc[:takes]),
+                                             tuple(acc[takes:]))))
+                else:
                     ret.append(tuple(acc))
-                acc = [] if i is None else [i]
+                acc, takes = [] if i is None else [i], 2  # reset option-arg cnt
             elif self._dict.get('magic_split', False):
-                acc.extend(i.split('::'))  # magic "::"-split
-                merged.append(None)
+                split = i.split('::')  # magic "::"-split
+                if len(acc) == 1 and acc[0].startswith('-') and acc[0] != '-':
+                    takes = len(split) + 1  # sticky option multi-arguments
+                acc.extend(split)
             else:
                 acc.append(i)
-        # expect that, by convention, option takes at most a single argument
-        ret.extend(filter(bool, (tuple(acc[:2]), tuple(acc[2:]))))
+            if acc and not merged:
+                merged.append(None)  # mark terminal acc -> ret propagation
         return ret
 
     @SimpleFormat.producing(MERGED, protect=True)
     def get_merged(self, *protodecl):
-        # try to look (indirectly) if we have "separated" at hand first
         if self.BYTESTRING in self._representations:  # break the possible loop
-            from shlex import split
-            ret = split(self.BYTESTRING())
-            enquote = self._dict.get('enquote', True)
-            if enquote:
+            # XXX backticks not supported (yet)
+            preprocessed = apply_partition(
+                self.BYTESTRING(),
+                lambda x, _, acc:
+                    x == '(' and acc and not(acc[0].lstrip().startswith('#'))
+                             and acc[-1][-1:] in '$<'
+                             and not(any((
+                                (lambda y, z: 0 if z == 1 and y == '"' else z % 2)(
+                                    y, acc[-1].lstrip(' \t' + y).count(y) - acc[-1].count('\\' + y)
+                                )
+                             ) for y in "'\""))
+                    or
+                    x == ')' and acc and (not acc[-1] or acc[-1][-1] != '\\')
+                             and any(y in acc[-2:-1] for y in '()')
+                             and not(any((
+                                acc[-1].lstrip(' \t' + y).count(y) - acc[-1].count('\\' + y)
+                             ) % 2 for y in "'\""))
+                    or
+                    x == ';' and acc and not(acc[0].lstrip().startswith('#'))
+                             and not(any((
+                                acc[-1].lstrip(' \t' + y).count(y) - acc[-1].count('\\' + y)
+                             ) % 2 for y in "'\""))
+            )
+            ret, prev = [], ''
+            # XXX could check quotation pairs match using a stack
+            for p in add_item(preprocessed, ''):
+                tail1, tail2 = '', ''
+                if p == '(':
+                    if p == '(' and prev[-1:] in '$<':
+                        qs = tuple(
+                            x for x in '"' if
+                            (prev[:-1].count(x) - prev[:-1].count('\\' + x)) % 2
+                        )
+                        if qs and prev[:-1].rstrip(" \t")[-1:] in qs:
+                            prev, tail1, tail2 = prev.rpartition(qs[0])
+                    ret.extend(filter(bool, split(prev) + [tail1 + tail2]))
+                    ret[-1] += p
+                    p = ''
+                elif prev == ')':
+                    qs = tuple(
+                        x for x in '"' if
+                        (p[:-1].count(x) - p[:-1].count('\\' + x)) % 2
+                    )
+                    if qs and p.lstrip(" \t")[:1] in qs:
+                        tail1, tail2, p = p.partition(qs[0])
+                    ret.extend(filter(bool, [prev + tail1 + tail2]))
+                elif prev:
+                    ret.extend(split(prev))
+                prev = p
+            if self._dict.get('enquote', True):
                 ret = self._escape(ret)
+            offset = 0
             for i, lexeme in enumerate(ret[:]):
                 # heuristic(!) method to normalize: '-a=b' -> '-a', 'b'
-                if (lexeme.count('=') == 1 and
+                if (lexeme.count('=') == 1 and lexeme.startswith('-') and
                     ('"' not in lexeme or lexeme.count('"') % 2) and
                     ("'" not in lexeme or lexeme.count("'") % 2)):
-                    ret[i:i + 1] = lexeme.split('=')
+                    ret[i + offset:i + offset + 1] = lexeme.split('=')
+                    offset += 1
         elif self.DICT in self._representations:  # break the possible loop (2)
             d = self.DICT(protect_safe=True)
             if not isinstance(d, OrderedDict):

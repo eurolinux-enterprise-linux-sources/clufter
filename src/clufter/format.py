@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base format stuff (metaclass, classes, etc.)"""
@@ -35,6 +35,7 @@ from .utils import arg2wrapped, args2sgpl, args2tuple, args2unwrapped, \
                    isinstanceupto, \
                    popattr, \
                    tuplist
+from .utils_lxml import etree_parser_safe
 from .utils_prog import ProtectedDict, getenv_namespaced
 from .utils_xml import rng_get_start, rng_pivot
 
@@ -190,7 +191,8 @@ class Format(object):
         """Format constructor, i.e., object = concrete internal data"""
         rs = {}
         self._representations, self._representations_ro = rs, ProtectedDict(rs)
-        self._hash = None
+        if not hasattr(self, '_hash'):  # can be defined at the class level
+            self._hash = None
         validator_specs = kwargs.pop('validator_specs', {})
         default = validator_specs.setdefault('', None)  # None ~ don't track
         validators = {}
@@ -265,6 +267,12 @@ class Format(object):
                                                  **dict(kwargs, spec=spec))
 
     @property
+    def hash(self):
+        if self._hash is None:
+            raise NotImplementedError
+        return self._hash
+
+    @property
     def representations(self):
         """Mapping of `protocol: initializing_data`"""
         # XXX should be ProtectedDict
@@ -330,6 +338,17 @@ class Format(object):
                 deco_args._validator = validator
             return deco_args
         return deco_meth
+
+
+class Nothing(Format):
+    """Empty format, typically an input for "generator" type of filters"""
+    native_protocol = VOID = Protocol('void')
+
+    _hash = hash(None)
+
+    @Format.producing(VOID)
+    def get_void(self, *protodecl):
+        pass  # same as return None
 
 
 class SimpleFormat(Format):
@@ -535,6 +554,14 @@ class CompositeFormat(Format, MetaPlugin):
         return tuple(f.producer(p)(p, *a, **kwargs)
                      for f, p, a in zip(self._designee, protocol[1], args))
 
+    @property
+    def hash(self):
+        """Compute hash trying to uniquely identify the format instance"""
+        if self._hash is None:
+            self._hash = hex(reduce(lambda a, b: a ^ int(b.hash, base=16),
+                                    self._designee, 0))[2:]
+        return self._hash  # XXX hex digest can possibly be shorter that normal
+
 
 class XML(SimpleFormat):
     """"Base for XML-based configuration formats"""
@@ -714,7 +741,7 @@ class XML(SimpleFormat):
                 schema = None
             if schema is None:
                 try:
-                    schema = etree.parse(s)
+                    schema = etree.parse(s, parser=etree_parser_safe)
                     rng = etree.RelaxNG(schema)
                     cls._validation_cache[s] = schema, rng
                 except (etree.RelaxNGError, etree.XMLSyntaxError):
@@ -737,7 +764,7 @@ class XML(SimpleFormat):
                 break
         else:
             log.warning("None of the validation attempts succeeded with"
-                        " validator spec `{0}' ".format(spec))
+                        " validator spec: {0}".format(', '.join(spec)))
 
         return fatal, master, master_snippet.strip()
 
@@ -753,4 +780,5 @@ class XML(SimpleFormat):
                             # pre 2.7 compat:  http://bugs.python.org/issue5982
                             validator=etree_validator.__get__(1).im_func)
     def get_etree(self, *protodecl):
-        return etree.fromstring(self.BYTESTRING()).getroottree()
+        return etree.fromstring(self.BYTESTRING(),
+                                parser=etree_parser_safe).getroottree()

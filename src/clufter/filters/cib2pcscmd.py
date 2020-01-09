@@ -1,37 +1,51 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """cib2pcscmd filter"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
 
+from ..facts import infer
 from ..filter import XMLFilter
+from ..filters._2pcscmd import verbose_ec_test, verbose_inform
 from ..utils_xml import squote
-from ..utils_xslt import xslt_params
+from ..utils_xslt import NL, xslt_params
 
 
-def attrset_xsl(attrset):
+def attrset_xsl(attrset, cmd=None, inform=None):
     return ('''\
-        <xsl:for-each select="{attrset}">
-            <xsl:choose>
-                <xsl:when test="rule and nvpair">
-                    <xsl:message>
-                        <!-- TODO:PCS -->
-                        <xsl:value-of select="concat('WARNING: has to skip rule-based',
-                                                    ' {attrset} ', @id,
-                                                    ' (rhbz#1250744)')"/>
-                    </xsl:message>
-                </xsl:when>
-                <xsl:otherwise>
+    <xsl:if test="{attrset}/nvpair">
+        <xsl:choose>
+            <xsl:when test="{attrset}/rule">
+                <xsl:message>
+                    <!-- TODO:PCS -->
+                    <xsl:value-of select="concat('WARNING: has to skip rule-based',
+                                                ' {attrset} ', @id,
+                                                ' (rhbz#1250744)')"/>
+                </xsl:message>
+            </xsl:when>
+            <xsl:otherwise>
+''' + (
+                (verbose_inform(inform) + '\n' if inform else '')
+                +
+                ('''<xsl:value-of select='concat("", {cmd})'/>'''
+                 if cmd else '')
+) + '''
+                <xsl:for-each select="{attrset}">
                     <xsl:for-each select="nvpair">
                         <xsl:value-of select='concat(" &apos;",
                                                     @name, "=", @value,
                                                     "&apos;")'/>
                     </xsl:for-each>
-                </xsl:otherwise>
-            </xsl:choose>
-        </xsl:for-each>
-''').format(attrset=attrset)
+                </xsl:for-each>
+''' + (
+                ('''<xsl:value-of select="'{NL}'"/>''' + '\n'
+                 + verbose_ec_test) if cmd and inform else ''
+) + '''
+            </xsl:otherwise>
+        </xsl:choose>
+    </xsl:if>
+''').format(NL=NL, attrset=attrset, cmd=cmd)
 
 
 @XMLFilter.deco('cib', 'string-list', defs=dict(
@@ -57,6 +71,17 @@ def cib2pcscmd(flt_ctxt, in_obj):
                 pcscmd_dryrun=dry_run,
                 pcscmd_pcs=squote("pcs -f {0} ".format(tmp_cib)
                                   if tmp_cib else "pcs "),
+
+                pcscmd_extra_utilization = bool(infer(
+                    'comp:pcs[utilization]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
+                pcscmd_extra_alerts = bool(infer(
+                    'comp:pacemaker[alerts] + comp:pcs[alerts]',
+                    flt_ctxt['system'],
+                    flt_ctxt['system_extra'],
+                )),
             ),
         ),
     )

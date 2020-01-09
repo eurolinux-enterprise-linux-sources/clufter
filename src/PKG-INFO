@@ -1,12 +1,12 @@
 Metadata-Version: 1.1
 Name: clufter
-Version: 0.50.4
+Version: 0.59.5
 Summary: Tool/library for transforming/analyzing cluster configuration formats
 Home-page: https://github.com/jnpkrn/clufter
 Author: Jan Pokorný and plugin authors
 Author-email: jpokorny+pkg-clufter@redhat.com
 License: GPLv2+
-Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.50.4
+Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.59.5
 Description: ==========================
          clufter (CLUster FilTER)
         ==========================
@@ -49,16 +49,20 @@ Description: ==========================
         When properly installed, ``clufter`` command should be only these few
         letters away at your shell prompt.  For simplicity, I will stick with
         what one can use directly after cloning the repository and running
-        ``./run-check`` (to get the helper binary ccompiled):
+        ``./run-check`` (to get the helper binary compiled):
         
         .. code-block:: bash
         
           $ ./run-dev ccs2pcscmd -gsq tests/filled.conf
+          # sequence generated on 2016-08-08 19:55:36 with: clufter 0.59.5
+          # invoked as: ['./run-dev', 'ccs2pcscmd', '-gsq', 'tests/filled.conf']
+          # targeting system: ('linux', 'fedora', '22', 'Twenty Two')
           pcs cluster auth ju hele
-          pcs cluster setup --start --name ju hele --consensus 200 --token 5000 \
+          pcs cluster setup --name test ju hele --consensus 200 --token 5000 \
             --join 100
-          sleep 60
-          pcs -f tmp-cib.xml property set stonith-enabled false
+          pcs cluster start --all && sleep 60
+          pcs cluster cib tmp-cib.xml
+          pcs -f tmp-cib.xml property set stonith-enabled=false
           pcs cluster cib-push tmp-cib.xml --config
         
         Here we got a sequence of ``pcs`` commands that should get us
@@ -114,11 +118,13 @@ Description: ==========================
         
         tests:
         
-        - outside of Python 2.7+, `unittest2`_ (``python-unittest2``) is needed
+        - outside of Python 2.7+, `unittest2`_ (``python-unittest2``)
+          or, alternatively, `nose`_ (``python-nose``) is needed
         
         .. _lxml: http://lxml.de
         .. _ordereddict: https://pypi.python.org/pypi/ordereddict
         .. _unittest2: https://pypi.python.org/pypi/unittest2
+        .. _nose: https://pypi.python.org/pypi/nose
         
         
         Stable version
@@ -127,6 +133,7 @@ Description: ==========================
         Official released tarballs (as opposed to what you can `download from
         GitHub <https://github.com/jnpkrn/clufter/releases>`_) can be found,
         together with GPG signatures,
+        at https://pagure.io/releases/clufter/ or, alternatively,
         at https://people.redhat.com/jpokorny/pkgs/clufter/.
         
         Also, the ``HEAD`` of ``master`` branch in the repository should always
@@ -137,6 +144,9 @@ Description: ==========================
         .. image:: https://travis-ci.org/jnpkrn/clufter.svg?branch=master
           :target: https://travis-ci.org/jnpkrn/clufter
         
+        .. image:: https://coveralls.io/repos/jnpkrn/clufter/badge.svg?branch=master&service=github
+          :target: https://coveralls.io/github/jnpkrn/clufter?branch=master
+        
         
         Development version
         ~~~~~~~~~~~~~~~~~~~
@@ -145,6 +155,9 @@ Description: ==========================
         
         .. image:: https://travis-ci.org/jnpkrn/clufter.svg?branch=next
           :target: https://travis-ci.org/jnpkrn/clufter
+        
+        .. image:: https://coveralls.io/repos/jnpkrn/clufter/badge.svg?branch=next&service=github
+          :target: https://coveralls.io/github/jnpkrn/clufter?branch=next
         
         
         ---------------

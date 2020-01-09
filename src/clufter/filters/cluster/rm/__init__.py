@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -90,6 +90,7 @@ ccs_obfuscate_identifiers = '''\
 ###
 
 from ....utils_cib import ResourceSpec
+from ....utils_xslt import xslt_id_friendly
 from .... import package_name
 
 ccsflat2cibprelude_elems_res_hybrid = (
@@ -100,32 +101,32 @@ ccsflat2cibprelude_elems_res_toplevel = ccsflat2cibprelude_elems_res_hybrid + (
     'service',
 )
 
-ccsflat2cibprelude_elems_with_res = ccsflat2cibprelude_elems_res_toplevel + (
-    'resources',
-)
-
 ccsflat2cibprelude = ('''\
     <xsl:for-each select="*[
 ''' + (
-    xslt_is_member('name()', ccsflat2cibprelude_elems_res_hybrid)
+        xslt_is_member('name()', ccsflat2cibprelude_elems_res_hybrid)
 ) + ''']
     |
     *[
 ''' + (
-    xslt_is_member('name()', ccsflat2cibprelude_elems_with_res)
-) + ''']/*">
+        xslt_is_member('name()', ccsflat2cibprelude_elems_res_toplevel)
+) + ''']/*[name() != 'action']">
         <!-- meta-primary can be, e.g., @address in case of ip,
              and that can contain '/' which is not NCNameChar -->
+        <xsl:variable name="Spec"
+                      select="
+''' + (
+                              xslt_id_friendly(
+                                  '(@*[name() = current()/@rgmanager-meta-primary]'
+                                  '|@name'
+                                  '|@address'
+                                  '|@SID'
+                                  '|@InstanceName'
+                                  ')[1]'
+                              )
+) + '''"/>
         <xsl:variable name="Prefix"
-                      select="concat('RESOURCE-', name(), '-',
-                                     translate((
-                                         @*[name() = current()/@rgmanager-meta-primary]
-                                         |@name
-                                         |@address
-                                         |@SID
-                                         |@InstanceName
-                                     )[1], '/', '_')
-                              )"/>
+                      select="concat('RESOURCE-', name(), '-', $Spec)"/>
         <primitive id="{$Prefix}">
 
             <xsl:attribute name="description"
@@ -171,23 +172,113 @@ ccsflat2cibprelude = ('''\
                 </xsl:otherwise>
             </xsl:choose>
 
-            <!-- store service reference for later use -->
+            <xsl:if test="number(@__max_failures) &gt; 0
+                          and
+                          number(@__failure_expire_time) &gt; 0">
+                <xsl:message>
+                    <xsl:value-of select="concat('WARNING: failures in status',
+                                                 ' checks (akin to __max_failures',
+                                                 ' and __failure_expire_time) are',
+                                                 ' always directly propagated',
+                                                 ' in Pacemaker without any',
+                                                 ' thresholding (', $Spec, ')')"/>
+                </xsl:message>
+            </xsl:if>
+
+            <!-- store service reference and auxiliary values for later use -->
 
             <meta_attributes id="{$Prefix}-META">
-                <nvpair id="{$Prefix}-META-service"
-                        name="rgmanager-service"
-                        value="{concat(
-                                  translate(
-                                      name(..),
-                                      'abcdefghijklmnopqrstuvwxyz',
-                                      'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                                  ),
-                                  '-',
-                                  ../@name
-                               )}"/>
+                <xsl:if test="
+''' + (
+                    xslt_is_member('name(..)',
+                                   ccsflat2cibprelude_elems_res_toplevel)
+) + '''">
+                    <nvpair id="{$Prefix}-META-service"
+                            name="rgmanager-service"
+                            value="{concat(
+                                    translate(
+                                        name(..),
+                                        'abcdefghijklmnopqrstuvwxyz',
+                                        'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                                    ),
+                                    '-',
+                                    ../@name
+                                )}"/>
+                </xsl:if>
+                <xsl:variable name="IntervalFound"
+                              select="action[
+                                  (
+                                      @name = 'monitor'
+                                      or
+                                      @name = 'status'
+                                  )
+                                  and
+                                  not(preceding-sibling::action[
+                                      (
+                                          @name = 'monitor'
+                                          or
+                                          @name = 'status'
+                                      )
+                                      and
+                                      @depth &lt; current()/@depth
+                                  ])
+                                  and
+                                  not(following-sibling::action[
+                                      (
+                                          @name = 'monitor'
+                                          or
+                                          @name = 'status'
+                                      )
+                                      and
+                                      @depth &lt; current()/@depth
+                                  ])
+                              ]/@interval"/>
+                <xsl:variable name="Interval">
+                    <xsl:value-of select="$IntervalFound"/>
+                    <xsl:if test="not($IntervalFound)">
+                        <xsl:value-of select="'60'"/>
+                    </xsl:if>
+                </xsl:variable>
+                <nvpair id="{$Prefix}-META-monitor"
+                        name="rgmanager-monitor"
+                        value="{concat($Interval, 's')}"/>
                 <!--nvpair id="{$Prefix}-META-domain"
                         name="rgmanager-domain"
                         value="{../@domain}"/-->
+
+                <xsl:variable name="IndependentSubtree">
+                    <xsl:choose>
+                        <xsl:when test="number(@__independent_subtree) = 1
+                                        or
+                                        translate(
+                                            @__independent_subtree,
+                                            'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                                            'abcdefghijklmnopqrstuvwxyz'
+                                        ) = 'yes'">
+                            <!-- xsl:value-of select="'1'"/ -->
+                            <xsl:message>
+                                <xsl:value-of select="concat('WARNING: __independent_subtree=1',
+                                                            ' property not propagated as there',
+                                                            ' is no straightforward equivalent',
+                                                            ' (', $Spec, ')')"/>
+                            </xsl:message>
+                        </xsl:when>
+                        <xsl:when test="number(@__independent_subtree) = 2
+                                        or
+                                        translate(
+                                            @__independent_subtree,
+                                            'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                                            'abcdefghijklmnopqrstuvwxyz'
+                                        ) = 'non-critical'">
+                            <xsl:value-of select="'2'"/>
+                        </xsl:when>
+                    </xsl:choose>
+                </xsl:variable>
+                <xsl:if test="$IndependentSubtree != ''">
+                    <nvpair id="{$Prefix}-META-independent"
+                            name="rgmanager-independent"
+                            value="{$IndependentSubtree}"/>
+                </xsl:if>
             </meta_attributes>
         </primitive>
     </xsl:for-each>
@@ -255,10 +346,11 @@ ccsflat2cibprelude = ('''\
     <clufter:descent at="failoverdomain"/>
 ''') % dict(
     package_name=package_name(),
-    note_unhandled='''<xsl:value-of select="concat('WARNING: resource ', name(),
-                                                   ' is currently unhandled by',
-                                                   ' the conversion, you are',
-                                                   ' advised to copy ',
+    note_unhandled='''<xsl:value-of select="concat('WARNING: resource `',
+                                                   name(),
+                                                   '` is currently unhandled',
+                                                   ' in the conversion, you',
+                                                   ' are advised to copy ',
                                                    substring-before(
                                                        @rgmanager-meta-agent,
                                                        '.metadata'
@@ -268,3 +360,82 @@ ccsflat2cibprelude = ('''\
                                                    ' to /usr/lib/ocf/resource.d',
                                                    '/rgmanager directory')"/>'''
 )
+
+###
+
+ccs_revitalize = '''\
+    <xsl:template match="service
+                          |service//*[name() != 'action']
+                          |vm
+                          |vm//*[name() != 'action']
+                          |resources/*">
+        <xsl:choose>
+            <!-- omit resources with repeated primary attribute
+                 rgmanager/src/daemons/reslist.c:store_resource:attribute collision
+                 (simplified a bit - limited just to sibling scope)
+                 XXX: this will only work for config preprocessed with
+                      ccs_flatten
+             -->
+            <xsl:when test="preceding-sibling::*[
+                                name() = name(current())
+                                and
+                                current()/@rgmanager-meta-primary
+                                and
+                                @*[
+                                    name() = current()/@rgmanager-meta-primary
+                                ] = current()/@*[
+                                    name() = current()/@rgmanager-meta-primary
+                                ]
+                             ]">
+                <xsl:message>
+                    <xsl:value-of select="concat('WARNING: omitting resource',
+                                                ' with repeated primary',
+                                                ' attribute (', name(), '/@',
+                                                @rgmanager-meta-primary, '=',
+                                                @*[
+                                                    name()
+                                                    =
+                                                    current()/@rgmanager-meta-primary
+                                                ], ')'
+                                          )"/>
+                </xsl:message>
+            </xsl:when>
+            <xsl:otherwise>
+                <xsl:copy>
+                    <xsl:choose>
+                        <!-- omit __max_failures + __failure_expire_time when
+                             used without any real effect -->
+                        <xsl:when test="not(@__max_failures)
+                                        !=
+                                        not(@__failure_expire_time)
+                                        or
+                                        number(@__max_failures) &lt;= 0
+                                        or
+                                        number(@__failure_expire_time) &lt; 0">
+                            <xsl:message>
+                                <xsl:value-of select="concat('WARNING: __max_failures',
+                                                             ' and __failure_expire_time',
+                                                             ' must be specified in pair',
+                                                             ' and both of them has to be',
+                                                             ' positive numbers; not',
+                                                             ' satisfied, hence dropped',
+                                                             '(', name(),')')"/>
+                            </xsl:message>
+                            <xsl:apply-templates select="@*[
+                                                             not(
+''' + (
+                                xslt_is_member('name()',
+                                               ('__max_failures',
+                                                '__failure_expire_time'))
+) + ''')]"/>
+                        </xsl:when>
+                        <xsl:otherwise>
+                            <xsl:apply-templates select="@*"/>
+                        </xsl:otherwise>
+                    </xsl:choose>
+                    <xsl:apply-templates select="@*|node()"/>
+                </xsl:copy>
+            </xsl:otherwise>
+        </xsl:choose>
+    </xsl:template>
+'''

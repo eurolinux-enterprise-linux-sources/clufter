@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """pcs2pcscmd{,-flatiron,-needle} commands"""
@@ -12,12 +12,20 @@ from ..protocol import protocols
 from ..utils_cib import PATH_CIB
 from ..utils_cman import PATH_CLUSTERCONF
 from ..utils_corosync import PATH_COROCONF
+from ._chains_pcs import cib2pcscmd_chain_exec
+
+from os import isatty
 
 
-@Command.deco(('ccspcmk2pcscmd',
-                  ('stringiter-combine2')),
-              ('cib2pcscmd',
-                  ('stringiter-combine2')))
+@Command.deco(('cmd-annotate',
+                          ('stringiter-combine3',
+                              ('cmd-wrap'))),
+              ('ccspcmk2pcscmd',
+                          ('stringiter-combine3'  # , ('cmd-wrap' ...
+                           )),
+              (cib2pcscmd_chain_exec(
+                          ('stringiter-combine3'  # , ('cmd-wrap' ...
+                           ))))
 def pcs2pcscmd_flatiron(cmd_ctxt,
                         ccs=PATH_CLUSTERCONF,
                         cib=PATH_CIB,
@@ -35,13 +43,13 @@ def pcs2pcscmd_flatiron(cmd_ctxt,
     """(Corosync/CMAN,Pacemaker) cluster cfg. -> reinstating pcs commands
 
     Options:
-        ccs         input Corosync/CMAN (+fencing pass-through) config. file
-        cib         input proper Pacemaker cluster config. file
+        ccs         input Corosync/CMAN (+fence_pcmk) configuration file
+        cib         input proper Pacemaker cluster config. file (CIB)
         output      pcs commands to reinstate the cluster per the inputs
         force       may the force be with emitted pcs commands
         noauth      skip authentication step (OK if already set up)
         silent      do not track the progress along the steps execution (echoes)
-        tmp_cib     file to accumulate the changes (empty ~ direct push)
+        tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
         enable      enable cluster infrastructure services (autostart on reboot)
         start_wait  fixed seconds to give cluster to come up initially
@@ -57,28 +65,55 @@ def pcs2pcscmd_flatiron(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+    # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
+
     return (
         (
-           file_proto(ccs),
-           (
-               file_proto(output),
-           ),
-           file_proto(cib),
-           #(
-           #    file_proto(output),  # already tracked
-           #),
+            void_proto(),
+            (
+                    (
+                        file_proto(output),
+                    ),
+            ),
+            file_proto(ccs),
+            # already tracked
+            #(
+            #        (
+            #            file_proto(output),
+            #        ),
+            #),
+            file_proto(cib),
+            # already tracked
+            #cib2pcscmd_output(
+            #        (
+            #            file_proto(output),
+            #        ),
+            #),
         ),
     )
 
 
-@Command.deco(('simpleconfig-normalize',
+@Command.deco(('cmd-annotate',
+                          ('stringiter-combine4',
+                              ('cmd-wrap'))),
+              ('simpleconfig-normalize',
                   ('simpleconfig2needlexml',
                       ('needlexml2pcscmd',
-                          ('stringiter-combine2')))),
-              ('cib2pcscmd',
-                          ('stringiter-combine2')))
+                          ('stringiter-combine4'  # , ('cmd-wrap' ...
+                           )),
+                      ('needleqdevicexml2pcscmd',
+                          ('stringiter-combine4'  # , ('cmd-wrap' ...
+                           )))),
+              (cib2pcscmd_chain_exec(
+                          ('stringiter-combine4'  # , ('cmd-wrap' ...
+                           ))))
 def pcs2pcscmd_needle(cmd_ctxt,
                       coro=PATH_COROCONF,
                       cib=PATH_CIB,
@@ -96,13 +131,13 @@ def pcs2pcscmd_needle(cmd_ctxt,
     """(Corosync v2,Pacemaker) cluster cfg. -> reinstating pcs commands
 
     Options:
-        coro        input Corosync v2 config. file
-        cib         input proper Pacemaker cluster config. file
+        coro        input Corosync v2 configuration file
+        cib         input proper Pacemaker cluster config. file (CIB)
         output      pcs commands to reinstate the cluster per the inputs
         force       may the force be with emitted pcs commands
         noauth      skip authentication step (OK if already set up)
         silent      do not track the progress along the steps execution (echoes)
-        tmp_cib     file to accumulate the changes (empty ~ direct push)
+        tmp_cib     file to accumulate the changes (empty ~ direct push, avoid!)
         dry_run     omit intrusive commands (TMP_CIB reset if empty)
         enable      enable cluster infrastructure services (autostart on reboot)
         start_wait  fixed seconds to give cluster to come up initially
@@ -118,22 +153,46 @@ def pcs2pcscmd_needle(cmd_ctxt,
     cmd_ctxt['pcscmd_start_wait'] = start_wait
     cmd_ctxt['pcscmd_noguidance'] = noguidance
     cmd_ctxt['text_width'] = text_width
+    # XXX possibility to disable cib-meld-templates
 
+    cmd_ctxt.filter('cmd-wrap')['color'] = output == "-" and isatty(1) and \
+                                           cmd_ctxt['color'] is not False \
+                                           or cmd_ctxt['color']
+
+    void_proto = protocols.plugins['void'].ensure_proto
     file_proto = protocols.plugins['file'].ensure_proto
     return (
         (
-            file_proto(coro),
+            void_proto(),
             (
-                (
-                    (
-                        file_proto(output),
-                    ),
-                ),
+                        (
+                            file_proto(output),
+                        ),
             ),
-           file_proto(cib),
-           #(
-           #            file_proto(output),  # already tracked
-           #),
+            file_proto(coro),
+            # already tracked
+            #(
+            #    (
+            #        (
+            #            (
+            #                file_proto(output),
+            #            ),
+            #        ),
+            #        # already tracked
+            #        #(
+            #        #    (
+            #        #        file_proto(output),
+            #        #    ),
+            #        #),
+            #    ),
+            #),
+            file_proto(cib),
+            # already tracked
+            #cib2pcscmd_output(
+            #            (
+            #                file_proto(output),
+            #            ),
+            #),
         ),
     )
 

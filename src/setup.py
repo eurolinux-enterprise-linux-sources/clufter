@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Setup script/data"""
@@ -522,6 +522,7 @@ pkg_prepare = setup_pkg_prepare(pkg_name, (
     ('hashalgo',        "which hash algorithm to use to generate output name"),
     ('ra_metadata_dir', "location of RGManager agents/metadata"),
     ('ra_metadata_ext', "extension used for RGManager agents' metadata"),
+    ('report_bugs',     "where to report bugs"),
 ))
 
 # Contains important values that are then referred to from ``package_data'',
@@ -681,7 +682,9 @@ setup(
     include_package_data=False,
 
     extras_require={
-        'test': cond_require('unittest2', unittest='runner')
+        'test': cond_require('unittest2', unittest='runner'),
+        'test-nose': cond_require('nose', unittest='runner'),
+        'coverage': ('coverage', ),
     },
 
     # TODO: uncomment this when ready for tests
