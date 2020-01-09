@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Machinery entry point"""
@@ -9,7 +9,7 @@ import logging
 from optparse import OptionParser, \
                      OptionGroup, \
                      IndentedHelpFormatter
-from os.path import basename
+from os.path import basename, realpath
 from platform import system, linux_distribution
 try:
     from platform import _supported_dists
@@ -24,7 +24,17 @@ from .completion import Completion
 from .error import EC
 from .facts import aliases_dist
 from .utils import args2sgpl, head_tail, identity
-from .utils_prog import ExpertOption, make_options, set_logging
+from .utils_prog import ExpertOption, make_options, set_logging, which
+
+try:
+    from .defaults import REPORT_BUGS
+except ImportError:
+    report_bugs = ()
+else:
+    report_bugs = ("Report bugs to", "<{0}>".format(REPORT_BUGS))
+    joint = ' '.join(report_bugs) + '.'
+    if len(joint) < 70:
+           report_bugs = (joint, )
 
 
 _system = system().lower()
@@ -189,6 +199,8 @@ class SharedHelpFormatter(IndentedHelpFormatter):
 
     def expand_default(self, option):
         ret = IndentedHelpFormatter.expand_default(self, option)
+        if isinstance(option, ExpertOption):
+            ret = "(Advanced) " + ret
         return ret.replace(self.choices_tag, ', '.join(option.choices or []))
 
 
@@ -224,6 +236,12 @@ class SharedOptionParser(OptionParser):
                          for l in self.get_description().split('\n\n')) \
                + (self.description_raw and '\n' + self.description_raw + '\n')
 
+    def format_epilog(self, formatter):
+        ret = '\n' + '\n'.join(formatter.format_epilog(l).strip('\n')
+                               if '<http' not in l else l
+                               for l in self.epilog.split('\n'))
+        return ret
+
     # custom methods
 
     def format_customized_help(self, **kwargs):
@@ -255,8 +273,10 @@ def run(argv=None, *args):
     # re option parser: only one instance is used, modified along
     ec = EC.EXIT_SUCCESS
     argv = list(argv) + list(args) if argv else list(args)
-    prog, args = (argv[0], argv[1:]) if argv else ('<script>', [])
+    prog, argv = (argv[0], argv[1:]) if argv else ('<script>', [])
     prog_simple = basename(prog)
+    prog_full = prog if prog != prog_simple else which(prog_simple, '.', '')
+    prog_real = basename(realpath(prog_full))
 
     parser = SharedOptionParser(prog=prog_simple, add_help_option=False)
     parser.disable_interspersed_args()  # enforce ordering as per "usage"
@@ -270,8 +290,8 @@ def run(argv=None, *args):
         option_list=make_options(opts_common)
     )
 
-    opts, args = parser.parse_args(args)
-    if opts.help is None:
+    opts, args = parser.parse_args(argv)
+    if prog_simple == prog_real and opts.help is None:
         # options that return/exit + don't need plugin resolutions (not help)
         if opts.version:
             loglevel = logging.getLevelName(opts.loglevel)
@@ -294,7 +314,8 @@ def run(argv=None, *args):
     cm = CommandManager.init_lookup(ext_plugins=not opts.skip_ext,
                                     ext_plugins_user=opts.ext_user,
                                     system=opts.sys, system_extra=opts.dist)
-    if not opts.help and (opts.list or opts.completion or not args):
+    if prog_simple == prog_real and not opts.help \
+       and (opts.list or opts.completion or not args):
         cmds = cm.pretty_cmds(ind=' ' * parser.formatter.indent_increment,
                               linesep_width=2,
                               cmds_intro="Commands"
@@ -316,10 +337,15 @@ def run(argv=None, *args):
                 usage="%prog [<global option> ...] [<cmd> [<cmd option ...>]]",
                 description=description_text(width=0),
                 description_raw=cmds,
-                epilog=("To get help for given command,"
-                        " just precede or follow it with `--help'.")
+                epilog='\n'.join(args2sgpl(
+                    "To get help for given command, just precede or follow"
+                    " it with `--help'.",
+                    *report_bugs
+                ))
             )
         return ec
+    elif prog_simple != prog_real:
+        args = [prog_simple] + argv
 
     # prepare option parser to be reused by sub-commands
     parser.enable_interspersed_args()
@@ -328,18 +354,18 @@ def run(argv=None, *args):
     modify_group.set_title("Command options")
     modify_group.set_description(None)
     parser.add_options(make_options(opts_nonmain))
-    parser.epilog = ("Arguments to value-based `command options' can go"
-                     " without labels when the order wrt. parsing logic"
-                     " respected;"
-                     " skipping those backed by default values otherwise"
-                     " requiring specification then allowed by syntactic"
-                     " sugar: all can be passed as a single, first,"
-                     " ::-delimited argument;"
-                     " magic files: `-', `@DIGIT+'."
-                     " `{{formula}}' in output file spec: input-backed"
-                     " (e.g. hash) substitution recipe."
-                     "  All available commands listed as `{0} --list'."
-                     .format(prog_simple))
+    parser.epilog = '\n'.join(args2sgpl(
+        "Arguments to value-based `command options' can go without labels"
+        " when the order wrt. parsing logic respected;"
+        " skipping those backed by default values otherwise requiring"
+        " specification then allowed by syntactic sugar: all can be passed"
+        " as a single, first, ::-delimited argument;"
+        " magic files: `-', `@DIGIT+'. `{{formula}}' in output file spec:"
+        " input-backed (e.g. hash) substitution recipe."
+        "  All available commands listed as `{0} --list'."
+        .format(prog_simple),
+        *report_bugs
+    ))
     #try:
     # note that the parser carries opts and "Common options" group
     ec = cm(parser, args)

@@ -1,5 +1,5 @@
 /*
-  Copyright 2015 Red Hat, Inc.
+  Copyright 2016 Red Hat, Inc.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms of the GNU General Public License as published by the
@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <glob.h>
 #include <libgen.h>
 #include <limits.h>
@@ -692,12 +693,16 @@ _get_childtypes(xmlDocPtr doc, xmlXPathContextPtr ctx, char *base, resource_rule
 }
 
 /**
-  Read a file from a stdout pipe.
+   Read a file from a stdout pipe.
+
+   @return              0 on success (file and length set/alloc'd accordingly;
+                        caller responsible for freeing file), nonzero on
+                        error/failure (file is free'd and length set to zero)
  */
 static int
 read_pipe(int fd, char **file, size_t * length)
 {
-    char buf[4096];
+    char buf[4096], *tmp_file;
     int n, done = 0;
 
     *file = NULL;
@@ -707,29 +712,35 @@ read_pipe(int fd, char **file, size_t * length)
 
         n = read(fd, buf, sizeof(buf));
         if (n < 0) {
-
             if (errno == EINTR)
                 continue;
-
-            if (*file)
-                free(*file);
-            return -1;
+            tmp_file = NULL;
         }
 
-        if (n == 0 && (!*length))
-            return 0;
-
-        if (n == 0) {
-            done = 1;
+        else if (n == 0 && (!*length)) {
+            return 0;  /* nothing to do */
         }
 
-        if (*file)
-            *file = realloc(*file, (*length) + n + done);
-        else
-            *file = malloc(n + done);
+        else {
+            if (n == 0)
+                done = 1;
+
+            if ((size_t)(*length + n + done) <= *length)
+                /* size_t overflow case, we assume: n + done > 0 */
+                tmp_file = NULL;
+            else
+                tmp_file = realloc(*file, (*length) + n + done);
+        }
+
+        if (!tmp_file) {
+            *length = 0;
+            free(*file);  /* prevent possible memleak */
+        }
+
+        *file = tmp_file;
 
         if (!*file)
-            return -1;
+            return -1;  /* error case, we cleaned up everything */
 
         memcpy((*file) + (*length), buf, n);
         *length += (done + n);
@@ -784,10 +795,7 @@ read_resource_agent_metadata(char *filename)
     waitpid(pid, NULL, 0);
     close(_pipe[0]);
 
-    if (!size)
-        return NULL;
-
-    doc = xmlParseMemory(data, size);
+    doc = xmlReadMemory(data, size, NULL, NULL, XML_PARSER_OPTIONS);
     free(data);
     return doc;
 }
@@ -817,7 +825,7 @@ load_resource_rulefile(char *filename, resource_rule_t ** rules,
         doc = read_resource_agent_metadata(filename);
 #ifdef RA_METADATA_EXT
     else
-        doc = xmlParseFile(filename);
+        doc = xmlReadFile(filename, NULL, XML_PARSER_OPTIONS);
 #endif
 
     if (!doc) {

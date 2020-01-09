@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base filter stuff (metaclass, decorator, etc.)"""
@@ -9,11 +9,13 @@ from copy import deepcopy
 from logging import getLogger
 from os import environ, isatty, stat
 from os.path import dirname, join
+from re import compile as re_compile
 from shlex import split as shlex_split
 from shutil import rmtree
 from subprocess import CalledProcessError, check_call
 from sys import modules, stderr, __stdin__
 from tempfile import mkdtemp, NamedTemporaryFile
+from time import time
 from warnings import warn
 try:
     from collections import OrderedDict
@@ -29,13 +31,16 @@ from .plugin_registry import MetaPlugin, PluginRegistry
 from .utils import args2tuple, arg2wrapped, \
                    filterdict_keep, filterdict_invkeep, filterdict_pop, \
                    head_tail, hybridproperty, \
-                   lazystring, tuplist
+                   identity, lazystring, tuplist
+from .utils_lxml import etree_XSLT_safe, \
+                        etree_parser_safe, etree_parser_safe_unblanking
 from .utils_func import apply_preserving_depth, \
                         apply_aggregation_preserving_depth, \
                         apply_intercalate, \
                         loose_zip, \
                         zip_empty
-from .utils_prog import cli_undecor, docformat, which
+from .utils_prog import FancyOutput, ProtectedDict, \
+                        cli_decor, cli_undecor, docformat, which
 from .utils_xml import CLUFTER_NS, XSL_NS, \
                        namespaced, nselem, squote, element_juggler, \
                        xml_get_root_pi, \
@@ -151,7 +156,7 @@ class Filter(object):
         if io_formats is None:
             return None
         self = super(Filter, cls).__new__(cls)
-        self._in_format, self._out_format = io_formats
+        (self._in_format, self._out_format), self._validated = io_formats, False
         return self
 
     @hybridproperty
@@ -171,18 +176,21 @@ class Filter(object):
             warn("{0}: do not pass extraneous keyword arguments when not"
                  " testing".format(self.__class__.__name__), RuntimeWarning)
         if flt_ctxt is None:  # when estranged (not under Command control)
-            cmd_ctxt = CommandContext(kws)
+            cmd_ctxt = CommandContext()
             flt_ctxt = cmd_ctxt.ensure_filter(self)
-        else:
-            flt_ctxt.update(filterdict_invkeep(kws, flt_ctxt))
+            # following only possibly without taint protection (this branch)
+            map(lambda d: flt_ctxt.parent.update(filterdict_invkeep(d, *flt_ctxt)),
+                (dict(self.defs), kws))
         fmt_kws = filterdict_keep(flt_ctxt, *self.out_format.context, **fmt_kws)
         outdecl = self._fnc(flt_ctxt, in_obj)
         outdecl_head, outdecl_tail = head_tail(outdecl)
         outdecl_tail = arg2wrapped(outdecl_tail)
+        if self._validated:
+            fmt_kws['validator_specs'] = {'': ''}
         return self.out_format(outdecl_head, *outdecl_tail, **fmt_kws)
 
     @classmethod
-    def deco(cls, in_format, out_format):
+    def deco(cls, in_format, out_format, defs=None):
         """Decorator as an easy factory of actual filters"""
         def deco_fnc(fnc):
             log.debug("Filter: deco for {0}".format(fnc))
@@ -192,11 +200,20 @@ class Filter(object):
                 '_in_format': in_format,
                 '_out_format': out_format,
                 '_fnc': staticmethod(fnc),
+                'defs': property(lambda self: ProtectedDict(defs)),
             }
             # optimization: shorten type() -> new() -> probe
             ret = cls.probe(fnc.__name__, (cls, ), attrs)
             return ret
         return deco_fnc
+
+    @classmethod
+    def ctxt_svc_output(cls, ctxt, msg, **kwargs):
+        if 'svc_output' in ctxt:
+            svc_output = ctxt['svc_output']
+        else:
+            svc_output = FancyOutput(f=stderr, prefix="[{0}] ")
+        svc_output(msg, prefix_arg=cls.name, **kwargs)
 
 
 def tag_log(s, elem):
@@ -209,19 +226,23 @@ class XMLFilter(Filter, MetaPlugin):
 
     _in_format = _out_format = 'XML'
 
+    _re_highlight = re_compile('(?P<lp>`)(?P<msg>[^`]*)(?P<rp>`)')
+
     @staticmethod
     @docformat(CMD_HELP_OPTSEP_COMMON)
     def command_common(cmd_ctxt,
                        nocheck=False,
                        batch=False,
                        editor=EDITOR,
-                       raw=False):
+                       raw=False,
+                       _profile=False):
         """\
         {0}
             nocheck   do not validate any step (even if self-checks present)
             batch     do not interact (validation failure recovery, etc.)
             editor    customize editor to run (unused in batch mode)
             raw       do not care about pretty-printed output
+            _profile  enable XSLT profiling (auxiliary files produced)
         """
         flt_ctxt = cmd_ctxt.filter()
         flt_ctxt.setdefault('validator_specs', {'': ''} if nocheck else {},
@@ -229,7 +250,8 @@ class XMLFilter(Filter, MetaPlugin):
         flt_ctxt.update(
             raw=raw,
             interactive=not(batch and isatty(__stdin__.fileno())),
-            editor=editor
+            editor=editor,
+            profile=_profile,
         )
 
     @staticmethod
@@ -310,7 +332,7 @@ class XMLFilter(Filter, MetaPlugin):
         return postprocess(ret)
 
     @classmethod
-    def _try_edit(cls, res_snippet, schema_path, schema_snippet, msgs,
+    def _try_edit(cls, res_snippet, schema_path, schema_snippet, msgs, cnt,
                   use_offset=True, editor='', **ignored):
         editor = editor.strip() or EDITOR
         pkg_name = package_name()
@@ -329,17 +351,21 @@ class XMLFilter(Filter, MetaPlugin):
             "  exiting the editor, the snippet will be inspected again)",
             ". OMITTING the snippet from the result, but be warned, this",
             "  may cause validation error at the level closer to the root",
-            ". TERMINATING the whole conversion: DELETE everything",
+            ". TERMINATING the whole conversion: EXIT without a modification",
+            "  {3} more time(s) in row or DELETE everything right away",
             "",
             "+ forcing the snippet, empty or not, without validation:",
             "  TURN `:force-this=false` to `:force-this=true`",
             "+ forcing the whole block of snippets without validation:",
             "  CHANGE `force-block` attribute in the root element to `true`",
+            "",
+            "Hint: `--dump={4} --nocheck` to store a full copy",
         ]
         offset = len(message) + len(msgs) + 5 if use_offset else 0
         e = '\n  '.join(["[{0}:{1}] {2}".format(m[0] + offset, *m[1:])
                         for m in msgs])
-        message = '  ' + '\n  '.join(message).format(pkg_name, e, schema_path)
+        message = '  ' + '\n  '.join(message).format(pkg_name, e, schema_path,
+                                                     cnt, cli_decor(cls.name))
         prompt = """\
 <{0}-recovery force-block="false">
 
@@ -360,39 +386,45 @@ class XMLFilter(Filter, MetaPlugin):
         tmpdir = mkdtemp(prefix=pkg_name)
         reply, force = '', ''
         try:
-            tmp = NamedTemporaryFile(dir=tmpdir, suffix='.xml', delete=True)
+            tmp_name = ""
+            tmp = NamedTemporaryFile(dir=tmpdir, suffix='.xml', delete=False)
             with tmp as tmpfile:
                 tmpfile.write(prompt)
                 tmpfile.flush()
-                orig_mtime = stat(tmp.name).st_mtime
-                # XXX: Windows platform: delete=False, then close-popen-open
-                editor_args = shlex_split(editor) + [tmp.name]
-                assert len(editor_args) >= 2
-                editor_args[0] = which(editor_args[0])
-                try:
-                    # pty.spawn doesn't work as nicely
-                    with open('/dev/tty') as f_tty:
-                        log.info("running `{0}'".format(' '.join(editor_args)))
-                        check_call(editor_args, stdin=f_tty)
-                except (CalledProcessError, IOError) as e:
-                    raise FilterError(cls, str(e))
-                except OSError:
-                    raise FilterError(cls, "Editor `{0}' seems unavailable"
-                                            .format(editor))
-                if orig_mtime == stat(tmp.name).st_mtime:
-                    return None, force  # no change occurred
-                # do not trust editors/sed/whatever to do a _real in-place_
-                # modifications (sed definitely doesn't; see also
-                # http://www.pixelbeat.org/docs/unix_file_replacement.html),
-                # otherwise tmpfile.seek(0) would be enough
-                with open(tmp.name, 'r') as tmpfile:
-                    reply = tmpfile.read().strip()
+                tmp_name = tmp.name
+            old_stat = stat(tmp_name)
+
+            editor_args = shlex_split(editor) + [tmp_name]
+            assert len(editor_args) >= 2
+            editor_args[0] = which(editor_args[0])
+            try:
+                # pty.spawn doesn't work as nicely,
+                # /dev/tty may not be present (with open('/dev/tty') as si)
+                # and we decide whether to be interactive per
+                # sys.__stdin__ anyway
+                log.info("running `{0}'".format(' '.join(editor_args)))
+                check_call(editor_args, stdin=__stdin__)
+            except (CalledProcessError, IOError) as e:
+                raise FilterError(cls, str(e))
+            except OSError:
+                raise FilterError(cls, "Editor `{0}' seems unavailable"
+                                        .format(editor))
+            new_stat = stat(tmp_name)
+            if old_stat.st_size == new_stat.st_size \
+                    and old_stat.st_mtime == new_stat.st_mtime:
+                return None, force  # no change occurred
+            # do not trust editors/sed/whatever to do a _real in-place_
+            # modifications (sed definitely doesn't; see also
+            # http://www.pixelbeat.org/docs/unix_file_replacement.html),
+            # otherwise tmpfile.seek(0) would be enough
+            with open(tmp_name, 'r') as tmpfile:
+                reply = tmpfile.read().strip()
         finally:
             rmtree(tmpdir)
         if not reply:
             return False, force  # terminating
         elems = []
-        reply = etree.fromstring(reply)
+        reply = etree.fromstring(reply, parser=etree_parser_safe)
         if reply.attrib.get('force-block', '').lower() == 'true':
             force = 'block'
         for root_pi in xml_get_root_pi(reply):
@@ -452,16 +484,22 @@ class XMLFilter(Filter, MetaPlugin):
                 parent_pos = element_juggler.grab(elem)
                 res_snippet = etree.tostring(elem, pretty_print=True)
                 force = False
-                while True:
+                for i in xrange(2, 0, -1):  # 2 subsequent NOOPs -> termination
                     try:
                         elems, force = cls._try_edit(res_snippet.strip(),
                                                      schema, schema_snippet,
-                                                     msgs, use_offset, **kws)
+                                                     msgs, i, use_offset, **kws)
                     except FilterError as e:
                         log.warning(str(e))
                         elems = ()
                     if elems is not None:  # active change
                         break
+                else:
+                    print >>stderr, ("Opportunity to recover the invalid"
+                                     " (intermediate) result was repeatedly"
+                                     " abandoned")
+                    elems = False
+
                 if not elems:
                     element_juggler.drop(elem)
                     if elems is False:
@@ -472,6 +510,7 @@ class XMLFilter(Filter, MetaPlugin):
                 else:
                     # positive change occurred (reverse due to insert)
                     elems = reversed(elems)
+
                 worklist.append(None)
                 for e in elems:
                     if not force:
@@ -484,7 +523,7 @@ class XMLFilter(Filter, MetaPlugin):
             cl = ret.xpath("//processing-instruction('{0}')".format(pi_comment))
             for e in cl:
                 # XXX could be done better?  (e.text.strip().join((' ', ) * 2))
-                reverted = etree.fromstring(e.text)
+                reverted = etree.fromstring(e.text, parser=etree_parser_safe)
                 element_juggler.rebind(nselem(CLUFTER_NS, 'comment', *tuple(
                                               reverted if len(reverted) else
                                               args2tuple(reverted.text))),
@@ -505,28 +544,53 @@ class XMLFilter(Filter, MetaPlugin):
             validator = self._out_format.validator('etree', spec=spec)
             if validator:
                 validate_hook = self._xslt_get_validate_hook(validator, **kws)
+                self._validated = True  # to avoid Format instance revalidation
         return (lambda ret, error_log=():
                     self._xslt_atom_hook(ret, error_log, validate_hook, **kws))
 
     @classmethod
-    def _xslt_atom_hook(cls, ret, error_log, validate_hook=None, maxl=1,
-                        svc_output=lambda s, **kwargs: stderr.write(s + '\n'),
+    def _xslt_atom_hook(cls, ret, error_log, validate_hook=None,
+                        svc_output=(lambda msg, **kws:
+                                    Filter.ctxt_svc_output({}, msg, **kws)),
                         **ignored):
         fatal = []
         for entry in error_log:
-            msg = ("|header:[{0:{1}}]| |subheader:XSLT|: {2}"
-                   .format(cls.name, maxl, entry.message))
-            svc_output(msg, urgent=entry.type != 0,
-                       base=entry.message.startswith('WARNING:') and 'warning')
-            if entry.type != 0:
+            emsg = entry.message
+            if (entry.domain == 22 and entry.type == 0 and entry.level == 2
+                    and emsg == "unknown error"):  # bogus errors
+                continue
+            urgent = (ret is None and not(emsg.split(' ', 1)[0].isupper())
+                      or entry.type != 0)
+            emsg = emsg if not urgent else 'FATAL: ' + emsg
+            emsg = cls._re_highlight.sub('\g<lp>|highlight:\g<msg>|\g<rp>',
+                                         emsg)
+            svc_output("|subheader:xslt:| {0}".format(emsg), urgent=urgent,
+                       base=reduce(
+                           lambda now, (new, new_l):
+                               now or (emsg.startswith(new) and new_l),
+                           {'WARNING:': 'warning', 'NOTE:': 'note'}.iteritems(),
+                           ''
+                       ) or urgent and 'error')
+            if urgent:
                 fatal.append("XSLT: " + entry.message)
-        if not fatal and validate_hook:
-            ret, entries = validate_hook(ret)
-            fatal.extend("RNG: " + ':'.join(args2tuple(str(e[0]), str(e[1]),
-                                                       *e[2:]))
-                         for e in entries)
+        if not fatal:
+            if hasattr(ret, 'xslt_profile') and ret.xslt_profile:
+                profile = etree.tostring(ret.xslt_profile, pretty_print=True)
+                fn = 'xslt-profile-{0}-{1}.xml'.format(cls.name,
+                                                       hex(int(time()))[2:])
+                with open(fn, "a") as f:
+                    f.write(profile)
+                    svc_output("|subheader:xslt-profile:| |highlight:{0}|"
+                               .format(fn))
+                del ret.xslt_profile
+
+            if validate_hook:
+                ret, entries = validate_hook(ret)
+                fatal.extend("RNG: " + ':'.join(args2tuple(str(e[0]), str(e[1]),
+                                                           *e[2:]))
+                             for e in entries)
         if fatal:
-            raise FilterPlainError("FAIL: {0}".format((', ').join(e for e in fatal)))
+            raise FilterPlainError("FAILED filter: {0}".format(cls.name))
         return ret
 
     @staticmethod
@@ -603,10 +667,11 @@ class XMLFilter(Filter, MetaPlugin):
                     )
                     element_juggler.drop(elem)
 
-            if parent and parent[2] == 1 and '*' not in hooks:
+            if parent and parent[2] and '*' not in hooks:
                 hooks['*'] = [((len(ret), ), 1)]
                 ret.append(nselem(CLUFTER_NS, 'descent-mix',
-                                  attrib={'preserve-rest': 'false'}))
+                                  attrib={'preserve-rest':
+                                          ('false', 'true')[parent[2] - 1]}))
 
             # do_mix decides whether the current sub-template will be
             # be applied and the result attached (0), or just merged
@@ -621,7 +686,7 @@ class XMLFilter(Filter, MetaPlugin):
             if do_mix and do_mix < will_mix:
                 raise RuntimeError("Parent does not want preserve-rest while"
                                    " child wants to")
-            elif do_mix > 1 and will_mix:  # and not parent
+            elif do_mix > 1 and will_mix and not parent:
                 do_mix = 1
 
             # note that when do_mix, nested top_levels are actually propagated
@@ -633,7 +698,7 @@ class XMLFilter(Filter, MetaPlugin):
                     #print "at", etree.tostring(ret), "appending", etree.tostring(e)
                     ret.append(deepcopy(e))
 
-            log.debug("hooks {0}".format(hooks))
+            log.debug("do_mix {0}, hooks {1}".format(do_mix, hooks))
             return (ret, hooks, do_mix)
         elif callable(sym):
             return sym
@@ -646,13 +711,13 @@ class XMLFilter(Filter, MetaPlugin):
     def proceed_xslt(cls, in_obj, xslt_atom_hook=lambda ret, err: ret, **kws):
         """Apply iteratively XSLT snippets as per the schema tree (walk)
 
-        You should likely use `proceed_xslt_filter` wrapper instead.
+        You should likely use `filter_proceed_xslt` wrapper instead.
         """
         # XXX postprocess: omitted as standard defines the only root element
 
-        def proceed(transformer, elem, children):
+        def proceed(transformer, elem, children, profile=False):
             # expect (xslt, hooks) in the former case
-            return xslt_atom_hook(*do_proceed(transformer, elem, children)
+            return xslt_atom_hook(*do_proceed(transformer, elem, children, profile)
                                   if not callable(transformer)
                                   else transformer(elem, children))
 
@@ -700,6 +765,10 @@ class XMLFilter(Filter, MetaPlugin):
                 if mix == 1 and at != '*':  #and elem.getparent() is None:
                     e = nselem(XSL_NS, 'apply-templates', select=".//{0}".format(at))
                     tag.append(e)
+                elif mix == 2:
+                    e = nselem(XSL_NS, 'copy')
+                    e.append(nselem(XSL_NS, 'apply-templates', select="@*|node()"))
+                    tag.append(e)
 
             cl = snippet.xpath("//clufter:descent|//clufter:descent-mix",
                                  namespaces={'clufter': CLUFTER_NS})
@@ -710,7 +779,7 @@ class XMLFilter(Filter, MetaPlugin):
                 parent[index:index] = e.getchildren()
                 e.getparent().remove(e)
 
-        def do_proceed(xslt, elem, children):
+        def do_proceed(xslt, elem, children, profile=False):
             # in bottom-up manner
 
             hooks, do_mix = xslt[1:]
@@ -745,9 +814,8 @@ class XMLFilter(Filter, MetaPlugin):
                     xslt_root.append(e)
 
             # if something still remains, we assume it is "template"
-            if len(snippet):
+            if filter(lambda x: x.tag not in TOP_LEVEL_XSL, snippet):
                 log.debug("snippet0: {0}, {1}, {2}".format(do_mix, elem.tag, etree.tostring(snippet)))
-                #if not filter(lambda x: x.tag in TOP_LEVEL_XSL, snippet):
                 template = nselem(XSL_NS, 'template', match=elem.tag)
                 if do_mix:
                     template.extend(snippet)
@@ -783,15 +851,19 @@ class XMLFilter(Filter, MetaPlugin):
                 elem = etree.ElementTree(elem)  # XXX not getroottree?
                 log.debug("Applying {0}, {1}".format(type(elem), etree.tostring(elem)))
                 log.debug("Applying on {0}".format(etree.tostring(xslt_root)))
-                #ret = elem.xslt(xslt_root)
-                xslt = etree.XSLT(xslt_root)
-                ret = xslt(elem)
-                error_log = xslt.error_log
-                # following seems to carefully preserve space (depending on
-                # xsl:output)
-                #ret = etree.fromstring(str(xslt(elem))).getroottree()
-                log.debug("With result {0}".format(etree.tostring(ret)))
-                #etree.cleanup_namespaces(ret)
+                xslt = etree_XSLT_safe(xslt_root)
+                try:
+                    ret = xslt(elem, profile_run=profile)
+                except etree.XSLTApplyError as e:
+                    error_log = e.error_log
+                    ret = None
+                else:
+                    # following seems to carefully preserve space (depending on
+                    # xsl:output)
+                    #ret = etree.fromstring(str(xslt(elem))).getroottree()
+                    log.debug("With result {0}".format(etree.tostring(ret)))
+                    #etree.cleanup_namespaces(ret)
+                    error_log = xslt.error_log
             return ret, error_log
 
         def postprocess(ret):
@@ -815,12 +887,16 @@ class XMLFilter(Filter, MetaPlugin):
 
             # XXX: ugly solution to get rid of the unneeded namespace
             # (cleanup_namespaces did not work here)
-            ret = etree.fromstring(etree.tostring(ret))
+            ret = etree.fromstring(etree.tostring(ret),
+                                   parser=etree_parser_safe)
             etree.cleanup_namespaces(ret)
             return ret
 
         if not kws.pop('textmode', False):
             kws.setdefault('postprocess', postprocess)
+        if kws.pop('profile', False):
+            kws['proceed'] = (lambda *args, **kwargs:
+                                  proceed(*args, profile=True, **kwargs))
         defaults = dict(preprocess=cls._xslt_preprocess, proceed=proceed,
                         sparse=True)
         defaults.update(kws)
@@ -893,8 +969,12 @@ class XMLFilter(Filter, MetaPlugin):
         if not root_dir:
             root_dir = dirname(modules[cls.__module__].__file__)
         kwargs.setdefault('symbol', cli_undecor(cls.name))
-        walk = in_obj.walk_schema(root_dir, **filterdict_pop(kwargs, 'symbol',
-                                                                     'sparse'))
+        walk = in_obj.walk_schema(root_dir, **filterdict_pop(kwargs,
+                                                             'symbol',
+                                                             'sparse',
+                                                             'xml_root'))
+        walk_transform = kwargs.pop('walk_transform', identity)
+        walk = walk_transform(walk)
         return cls._traverse(in_obj, walk, **kwargs)
 
     def filter_proceed_xslt(self, in_obj, **kwargs):
@@ -919,7 +999,7 @@ class XMLFilter(Filter, MetaPlugin):
             def_first += '<clufter:descent-mix preserve-rest="true"/>'
 
         xslt_atom_hook = self._xslt_get_atom_hook(**filterdict_pop(kwargs,
-            'editor', 'interactive', 'maxl', 'svc_output', 'validator_specs'
+            'editor', 'interactive', 'svc_output', 'validator_specs'
         ))
 
         kwargs.setdefault('walk_default_first', def_first)
@@ -929,9 +1009,8 @@ class XMLFilter(Filter, MetaPlugin):
         if not raw and not textmode:
             # <http://lxml.de/FAQ.html#
             #  why-doesn-t-the-pretty-print-option-reformat-my-xml-output>
-            # XXX we could use a single shared un-blanking parser around
-            parser = etree.XMLParser(remove_blank_text=True)
-            ret = etree.fromstring(etree.tostring(ret), parser)
+            ret = etree.fromstring(etree.tostring(ret),
+                                   parser=etree_parser_safe_unblanking)
         elif textmode:
             ret = str(ret)
         return ret
@@ -939,17 +1018,20 @@ class XMLFilter(Filter, MetaPlugin):
     def ctxt_proceed_xslt(self, ctxt, in_obj, **kwargs):
         """The same as `filter_proceed_xslt`, context-aware"""
         kwargs = filterdict_keep(ctxt,
-            'raw', 'system', 'system_extra',  # <- proceed_xslt / atom_hook -v
-            'editor', 'interactive', 'maxl', 'svc_output', 'validator_specs',
+            'profile', 'raw', 'system', 'system_extra',  # <- proceed_xslt
+            'editor', 'interactive', 'validator_specs',  # <- atom_hook
             **kwargs
         )
+        kwargs['svc_output'] = ctxt.ctxt_svc_output
         return self.filter_proceed_xslt(in_obj, **kwargs)
 
     @classmethod
     def deco_xslt(cls, in_format, out_format, **kwargs):
         def deco_cls(new_cls):
-            fnc = lambda ctxt, in_obj: \
-                      ('etree', ctxt.ctxt_proceed_xslt(in_obj, **kwargs))
+            fnc = lambda ctxt, in_obj, **kwargsi: \
+                      ('etree', ctxt.ctxt_proceed_xslt(in_obj,
+                                                       **dict(kwargs,
+                                                              **kwargsi)))
             fnc.__name__ = new_cls.__name__
             fnc.__module__ = new_cls.__module__
             return cls.deco(in_format, out_format)(fnc)
@@ -963,5 +1045,6 @@ class XMLFilter(Filter, MetaPlugin):
         kwargs.setdefault('symbol', cli_undecor(cls.name))
         walk = in_obj.walk_schema(root_dir, preprocess=cls._xslt_preprocess,
                                   sparse=False,
-                                  **filterdict_pop(kwargs, 'symbol'))
+                                  **filterdict_pop(kwargs, 'symbol',
+                                                           'xml_root'))
         return cls._xslt_template(walk)

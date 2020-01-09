@@ -1,5 +1,5 @@
 /*
-  Copyright 2015 Red Hat, Inc.
+  Copyright 2016 Red Hat, Inc.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms of the GNU General Public License as published by the
@@ -16,8 +16,8 @@
   Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
   MA 02110-1301 USA
 */
-#ifndef _RESLIST_H
-#  define _RESLIST_H
+#ifndef RESLIST_H_
+#  define RESLIST_H_
 
 #  include <stdint.h>
 #  include <libxml/parser.h>
@@ -199,6 +199,7 @@ void destroy_resource(resource_t * res);
 char *attr_value(resource_node_t * node, const char *attrname);
 char *res_attr_value(resource_t * res, const char *attrname);
 char *primary_attr_value(resource_t *);
+char *primary_attr_name(resource_t *);
 void *act_dup(resource_act_t * acts);
 
 #endif                          /* _RESLIST_H */

@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base format stuff (metaclass, classes, etc.)"""
@@ -29,11 +29,13 @@ from .protocol import Protocol
 from .utils import arg2wrapped, args2sgpl, args2tuple, args2unwrapped, \
                    classproperty, \
                    head_tail, \
+                   hybridmethod, \
                    immutable, \
                    iterattrs, \
                    isinstanceupto, \
                    popattr, \
                    tuplist
+from .utils_lxml import etree_parser_safe
 from .utils_prog import ProtectedDict, getenv_namespaced
 from .utils_xml import rng_get_start, rng_pivot
 
@@ -57,7 +59,7 @@ class formats(PluginRegistry):
 
         cls._protocols, cls._validators, cls._protocol_attrs = {}, {}, set()
         cls._context = set(popattr(cls, 'context_specs',
-                           attrs.pop('context_specs', ())))
+                                   attrs.pop('context_specs', ())))
         # protocols merge: top-down through inheritance
         for base in reversed(bases):
             cls._protocols.update(getattr(base, '_protocols', {}))
@@ -150,7 +152,8 @@ class Format(object):
         if protocol == 'native':
             protocol = self.native_protocol
 
-        assert protocol in self._protocols
+        assert protocol in self._protocols, ("unrecognized protocol `{0}'"
+                                             .format(protocol))
         assert args != (None, )
         validator = self.validator(protocol)
         if validator:
@@ -243,23 +246,23 @@ class Format(object):
         """Set of supported protocols for int-/externalization"""
         return self._protocols.keys()  # installed by meta-level
 
-    @classmethod
-    def validator(cls, protocol=None, spec=None):
+    @hybridmethod
+    def validator(this, protocol=None, spec=None):
         """Return validating function or None
 
         This ought to be the authoritative (and only) way to use
         a validator, do not touch _validators and also validator_specs
         is not dropped from class attributes for this very reason.
         """
-        which = cls.native_protocol if protocol is None else protocol
+        which = this.native_protocol if protocol is None else protocol
         try:
-            validator, sp = cls._validators[which]  # installed by meta-level
+            validator, sp = this._validators[which]  # installed by meta-level
         except KeyError:
             return None
         spec = spec if spec is not None else sp
         if spec == '':
             return None
-        return lambda *args, **kwargs: validator(cls, *args,
+        return lambda *args, **kwargs: validator(this, *args,
                                                  **dict(kwargs, spec=spec))
 
     @property
@@ -307,7 +310,8 @@ class Format(object):
                         produced = producer(protocol, *args, **kwargs)
                         if produced is None:
                             continue
-                        if that_cls is self.__class__:
+                        if (that_cls is self.__class__
+                            and protocol not in self._representations):
                             # computed -> stored normalization
                             self.swallow(protocol, *arg2wrapped(produced))
                         else:
@@ -333,6 +337,7 @@ class SimpleFormat(Format):
     """This is what most of the format classes want to subclass"""
     native_protocol = BYTESTRING = Protocol('bytestring')
     FILE = Protocol('file')
+    void_file = '/dev/null'  # XXX not multi-platform
 
     def __init__(self, protocol, *args, **kwargs):
         """Format constructor, i.e., object = concrete uniformat data"""
@@ -429,6 +434,7 @@ class SimpleFormat(Format):
         # turning @DIGIT+ magic files into fileobjs (needs global view)
         if tuplist(io_decl) and len(io_decl) >= 2 and io_decl[0] == cls.FILE:
             try:
+                # incl. late/dynamic interpolation of defaults ~ filters' inputs
                 io_decl = args2tuple(io_decl[0],
                                      io_decl[1].format(**interpolations),
                                      *io_decl[2:])
@@ -530,6 +536,14 @@ class CompositeFormat(Format, MetaPlugin):
         return tuple(f.producer(p)(p, *a, **kwargs)
                      for f, p, a in zip(self._designee, protocol[1], args))
 
+    @property
+    def hash(self):
+        """Compute hash trying to uniquely identify the format instance"""
+        if self._hash is None:
+            self._hash = hex(reduce(lambda a, b: a ^ int(b.hash, base=16),
+                                    self._designee, 0))[2:]
+        return self._hash  # XXX hex digest can possibly be shorter that normal
+
 
 class XML(SimpleFormat):
     """"Base for XML-based configuration formats"""
@@ -573,7 +587,7 @@ class XML(SimpleFormat):
 
     @classmethod
     def walk_schema(cls, root_dir, symbol=None, preprocess=lambda s, n: s,
-                    sparse=True):
+                    sparse=True, xml_root=None):
         """
         Get recipe for visiting symbol(s) within the XML as (sparsely) arranged
 
@@ -592,7 +606,7 @@ class XML(SimpleFormat):
 
         NB: order of keys really does not matter.
         """
-        xml_root = cls.root
+        xml_root = xml_root or cls.root
         particular_namespace = '.'.join((cls.namespace, symbol or xml_root))
         result = {}
         tree_stack = [(root_dir, None, result)]  # for bottom-up reconstruction
@@ -647,10 +661,14 @@ class XML(SimpleFormat):
                 current_tracking[name] = (swag, {})
 
         for i in xrange(cls.MAX_DEPTH):
-            if cls._walk_schema_step_up(tree_stack) is result:
-                return result
+            try:
+                if cls._walk_schema_step_up(tree_stack) is result:
+                    return result
+            except IndexError:
+                raise FormatError(cls, "Format tree structure inconsistency"
+                                       " detected")
         else:
-            raise RuntimeError('INFLOOP detected')
+            raise FormatError(cls, "INFLOOP detected")
 
     ###
 
@@ -705,7 +723,7 @@ class XML(SimpleFormat):
                 schema = None
             if schema is None:
                 try:
-                    schema = etree.parse(s)
+                    schema = etree.parse(s, parser=etree_parser_safe)
                     rng = etree.RelaxNG(schema)
                     cls._validation_cache[s] = schema, rng
                 except (etree.RelaxNGError, etree.XMLSyntaxError):
@@ -728,7 +746,7 @@ class XML(SimpleFormat):
                 break
         else:
             log.warning("None of the validation attempts succeeded with"
-                        " validator spec `{0}' ".format(spec))
+                        " validator spec: {0}".format(', '.join(spec)))
 
         return fatal, master, master_snippet.strip()
 
@@ -744,4 +762,5 @@ class XML(SimpleFormat):
                             # pre 2.7 compat:  http://bugs.python.org/issue5982
                             validator=etree_validator.__get__(1).im_func)
     def get_etree(self, *protodecl):
-        return etree.fromstring(self.BYTESTRING()).getroottree()
+        return etree.fromstring(self.BYTESTRING(),
+                                parser=etree_parser_safe).getroottree()

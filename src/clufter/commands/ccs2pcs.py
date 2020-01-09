@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """ccs2pcs{,-flatiron,-needle} commands"""
@@ -10,6 +10,7 @@ from ..facts import cluster_pcs_1_2, cluster_pcs_flatiron
 from ..filter import XMLFilter
 from ..protocol import protocols
 from ..utils_cman import PATH_CLUSTERCONF
+from ._chains_pcs import ccsflat2cibfinal_chain, ccsflat2cibfinal_output
 
 
 def _check_pacemaker_1_2(cmd_ctxt):
@@ -27,14 +28,11 @@ def _check_pacemaker_1_2(cmd_ctxt):
                    urgent=True,
         )
 
-ccsflat2cibfinal_chain = ('ccs-revitalize',
-                             ('ccsflat2cibprelude',
-                                 ('cibprelude2cibcompact',
-                                     ('cibcompact2cib',
-                                         ('cib2cibfinal')))))
 
 @Command.deco(('ccs2ccsflat',
-                  ('ccs2ccs-pcmk'),
+                  ('ccs-disable-rg',
+                      ('ccs2ccs-pcmk',
+                          ('ccs-version-bump'))),
                   (ccsflat2cibfinal_chain)))
 def ccs2pcs_flatiron(cmd_ctxt,
                      input=PATH_CLUSTERCONF,
@@ -49,9 +47,9 @@ def ccs2pcs_flatiron(cmd_ctxt,
     (~cluster.conf) along with Pacemaker proper one (~cib.xml).
 
     Options:
-        input     input (CMAN,rgmanager) cluster config. file
+        input     input (CMAN,rgmanager) cluster configuration file
         ccs_pcmk  output Corosync/CMAN (+fencing pass-through) config. file
-        cib       output proper Pacemaker cluster config. file
+        cib       output proper Pacemaker cluster config. file (CIB)
     """
     _check_pacemaker_1_2(cmd_ctxt)
 
@@ -59,15 +57,13 @@ def ccs2pcs_flatiron(cmd_ctxt,
     return (
         file_proto(input),
         (
-            file_proto(ccs_pcmk),
             (
                 (
-                    (
-                        (
-                            file_proto(cib),
-                        ),
-                    ),
+                    file_proto(ccs_pcmk),
                 ),
+            ),
+            ccsflat2cibfinal_output(
+                file_proto(cib),
             ),
         ),
     )
@@ -92,7 +88,7 @@ def ccs2pcs_needle(cmd_ctxt,
     Options:
         input     input (CMAN,rgmanager) cluster configuration file
         coro      output Corosync v2 config. file
-        cib       output proper Pacemaker cluster config. file
+        cib       output proper Pacemaker cluster config. file (CIB)
     """
     _check_pacemaker_1_2(cmd_ctxt)
 
@@ -105,14 +101,8 @@ def ccs2pcs_needle(cmd_ctxt,
                     file_proto(coro),
                 ),
             ),
-            (
-                (
-                    (
-                        (
-                            file_proto(cib),
-                        ),
-                    ),
-                ),
+            ccsflat2cibfinal_output(
+                file_proto(cib),
             ),
         ),
     )

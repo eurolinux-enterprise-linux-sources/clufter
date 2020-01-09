@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Setup script/data"""
@@ -42,6 +42,7 @@ def doraise_py_compile(file, cfile=None, dfile=None, doraise=False):
 py_compile.compile = doraise_py_compile
 
 PREFER_GITHUB = True
+PREFER_FORGE = 'github' if PREFER_GITHUB else 'pagure'  # alternatively: None
 DEBUG = getenv("SETUPDEBUG")
 DBGPFX = str(__file__)
 
@@ -521,6 +522,7 @@ pkg_prepare = setup_pkg_prepare(pkg_name, (
     ('hashalgo',        "which hash algorithm to use to generate output name"),
     ('ra_metadata_dir', "location of RGManager agents/metadata"),
     ('ra_metadata_ext', "extension used for RGManager agents' metadata"),
+    ('report_bugs',     "where to report bugs"),
 ))
 
 # Contains important values that are then referred to from ``package_data'',
@@ -563,12 +565,16 @@ def cond_require(package, *packages, **preferred):
 
 url_dict = dict(name=pkg_name, ver=pkg.version)
 download_url = ''
-if PREFER_GITHUB:
+if PREFER_FORGE == 'github':
     url = 'https://github.com/jnpkrn/{name}'
     if 'git.' in pkg.version:
         download_url = url + '/tarball/' + pkg.version.partition('git.')[-1]
     elif pkg.version.split('+')[-1] != 'a':
         download_url = url + '/tarball/v{ver}'
+elif PREFER_FORGE == 'pagure':
+    url = 'https://pagure.io/{name}'
+    if pkg.version.split('+')[-1] != 'a':
+        download_url = 'https://pagure.io/releases/{name}/{name}-{ver}.tar.gz'
 else:
     url = 'http://people.redhat.com/jpokorny/pkgs/{name}'
     if pkg.version.split('+')[-1] != 'a':
@@ -616,6 +622,7 @@ setup(
         pkg_name: [
             pkg_param_defaults,
             'formats/*/*.rng',
+            'formats/*/*.minimal',
             'ext-plugins/PURPOSE',
         ],
     },
@@ -675,7 +682,9 @@ setup(
     include_package_data=False,
 
     extras_require={
-        'test': cond_require('unittest2', unittest='runner')
+        'test': cond_require('unittest2', unittest='runner'),
+        'test-nose': cond_require('nose', unittest='runner'),
+        'coverage': ('coverage', ),
     },
 
     # TODO: uncomment this when ready for tests

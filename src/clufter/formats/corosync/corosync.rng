@@ -95,6 +95,7 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -106,7 +107,18 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
 that will be used for any messages sent to syslog.</a:documentation>
         
         <choice>
+          <value>auth</value>
+          <value>authpriv</value>
+          <value>cron</value>
           <value>daemon</value>
+          <value>ftp</value>
+          <value>kern</value>
+          <value>lpr</value>
+          <value>mail</value>
+          <value>news</value>
+          <value>syslog</value>
+          <value>user</value>
+          <value>uucp</value>
           <value>local0</value>
           <value>local1</value>
           <value>local2</value>
@@ -129,6 +141,7 @@ is the same as *debug* is 'on'.</a:documentation>
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -160,6 +173,8 @@ use `logrotate(8)` with the option `copytruncate`, e.g.
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -170,6 +185,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -180,6 +197,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -230,6 +249,7 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -241,7 +261,18 @@ if *debug* is 'on'.  Note: 'debug' is the same as if *debug* is 'on'.</a:documen
 that will be used for any messages sent to syslog.</a:documentation>
         
         <choice>
+          <value>auth</value>
+          <value>authpriv</value>
+          <value>cron</value>
           <value>daemon</value>
+          <value>ftp</value>
+          <value>kern</value>
+          <value>lpr</value>
+          <value>mail</value>
+          <value>news</value>
+          <value>syslog</value>
+          <value>user</value>
+          <value>uucp</value>
           <value>local0</value>
           <value>local1</value>
           <value>local2</value>
@@ -264,6 +295,7 @@ is the same as *debug* is 'on'.</a:documentation>
           <value>debug</value>
           <value>emerg</value>
           <value>err</value>
+          <value>error</value>
           <value>info</value>
           <value>notice</value>
           <value>warning</value>
@@ -295,6 +327,8 @@ use `logrotate(8)` with the option `copytruncate`, e.g.
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -305,6 +339,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -315,6 +351,8 @@ the respective destination of logging output.</a:documentation>
         
         <choice>
           <value>no</value>
+          <value>off</value>
+          <value>on</value>
           <value>yes</value>
         </choice>
       </attribute>
@@ -702,6 +740,18 @@ the protocol is under low utilization.</a:documentation>
           </attribute>
         </optional>
         <optional>
+          <attribute name="ip_version" a:defaultValue="ipv4">
+	    <a:documentation>Specifies version of IP to use for
+communication.  Value can be one of ipv4 or ipv6.  Default (if
+unspecified) is ipv4.</a:documentation>
+            
+            <choice>
+              <value>ipv4</value>
+              <value>ipv6</value>
+            </choice>
+          </attribute>
+        </optional>
+        <optional>
           <attribute name="join" a:defaultValue="50">
             <a:documentation>This timeout specifies in milliseconds how
 long to wait for join messages in the membership protocol.</a:documentation>
@@ -928,6 +978,19 @@ milliseconds until a token loss is declared after not receiving
 a token.  This is the time spent detecting a failure of a processor
 in the current configuration.  Reforming a new configuration takes
 about 50 milliseconds in addition to this timeout.</a:documentation>
+            
+            <data type="unsignedInt"/>
+          </attribute>
+        </optional>
+        <optional>
+          <attribute name="token_coefficient" a:defaultValue="650">
+	    <a:documentation>This value is used only when
+nodelist section is specified and contains at least 3 nodes.
+If so, real token timeout is then computed as
+token + (number_of_nodes - 2) * token_coefficient.  This allows
+cluster to scale without manually changing token timeout every
+time new node is added.  This value can be set to 0 resulting
+in effective removal of this feature.</a:documentation>
             
             <data type="unsignedInt"/>
           </attribute>

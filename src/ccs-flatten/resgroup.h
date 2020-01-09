@@ -1,5 +1,5 @@
-#ifndef __RESGROUP_H
-#  define __RESGROUP_H
+#ifndef RESGROUP_H_
+#  define RESGROUP_H_
 
 #  include <pthread.h>
 #  include <stdio.h>
@@ -8,7 +8,6 @@
 #  include <string.h>
 #  include <unistd.h>
 #  include <sys/types.h>
-#  include <errno.h>
 
 /* Requests */
 #  define RG_SUCCESS	  0

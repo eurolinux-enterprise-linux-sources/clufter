@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2014 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Various little+independent helpers"""
@@ -56,14 +56,14 @@ filterdict_invmap = \
 filterdict_keep = \
     lambda src, *which, **update: \
         filterdict_map(
-            lambda x, fn=update.pop('fn', identity): fn(src[x]),
+            lambda x, fn=update.pop('_fn_', identity): fn(src[x]),
             src, *which, **update
         )
 
 filterdict_invkeep = \
     lambda src, *which, **update: \
         filterdict_invmap(
-            lambda x, fn=update.pop('fn', identity): fn(src[x]),
+            lambda x, fn=update.pop('_fn_', identity): fn(src[x]),
             src, *which, **update
         )
 
@@ -72,14 +72,14 @@ filterdict_invkeep = \
 filterdict_pop = \
     lambda src, *which, **update: \
         filterdict_map(
-            lambda x, fn=update.pop('fn', identity): fn(src.pop(x)),
+            lambda x, fn=update.pop('_fn_', identity): fn(src.pop(x)),
             src, *which, **update
         )
 
 filterdict_invpop = \
     lambda src, *which, **update: \
         filterdict_invmap(
-            lambda x, fn=update.pop('fn', identity): fn(src.pop(x)),
+            lambda x, fn=update.pop('_fn_', identity): fn(src.pop(x)),
             src, *which, **update
         )
 
@@ -88,14 +88,14 @@ filterdict_invpop = \
 filterdict_remove = \
     lambda src, *which, **update: \
         filterdict_map(
-            lambda x, fn=update.pop('fn', identity): fn(src.remove(x) or x),
+            lambda x, fn=update.pop('_fn_', identity): fn(src.remove(x) or x),
             src, *which, **update
         )
 
 filterdict_invremove = \
     lambda src, *which, **update: \
         filterdict_invmap(
-            lambda x, fn=update.pop('fn', identity): fn(src.remove(x) or x),
+            lambda x, fn=update.pop('_fn_', identity): fn(src.remove(x) or x),
             src, *which, **update
         )
 
@@ -114,7 +114,12 @@ def isinstanceupto(subj, obj, *exc):
 
 
 def areinstances(obj1, obj2):
-    isinstance(obj1, obj2.__class__) or isinstance(obj2, obj1.__class__)
+    return isinstance(obj1, obj2.__class__) or isinstance(obj2, obj1.__class__)
+
+
+def areinstancesupto(obj1, obj2, *exc):
+    return isinstanceupto(obj1, obj2.__class__, *exc) \
+        or isinstanceupto(obj2, obj1.__class__, *exc)
 
 
 def popattr(obj, what, *args):
@@ -183,6 +188,14 @@ class hybridproperty(property):
 
     def __get__(self, this, owner):
         return self.fget.__get__(None, this if this else owner)()
+
+
+class hybridmethod(property):
+    def __init__(self, fnc):
+        property.__init__(self, classmethod(fnc))
+
+    def __get__(self, this, owner):
+        return self.fget.__get__(None, this if this else owner)
 
 
 # inspired from speaklater: http://pypi.python.org/pypi/speaklater

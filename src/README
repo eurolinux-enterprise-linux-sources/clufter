@@ -34,6 +34,52 @@ a Python library, which is the case, e.g., with `pcs`_.
 .. _pcs: https://github.com/feist/pcs/
 
 
+Demo
+~~~~
+
+When properly installed, ``clufter`` command should be only these few
+letters away at your shell prompt.  For simplicity, I will stick with
+what one can use directly after cloning the repository and running
+``./run-check`` (to get the helper binary compiled):
+
+.. code-block:: bash
+
+  $ ./run-dev ccs2pcscmd -gsq tests/filled.conf
+  pcs cluster auth ju hele
+  pcs cluster setup --start --name test ju hele --consensus 200 \
+    --token 5000 --join 100
+  sleep 60
+  pcs cluster cib tmp-cib.xml --config
+  pcs -f tmp-cib.xml property set stonith-enabled=false
+  pcs cluster cib-push tmp-cib.xml --config
+
+Here we got a sequence of ``pcs`` commands that should get us
+started with rebuilding a cluster originally based on CMAN/rgmanager
+stack (with configuration captured in given file), now targetting
+Corosync/Pacemaker one (for which ``pcs`` is one of the high-level
+configuration tools).
+
+Depending on how sensitive the target environment is (conversely,
+how much confident of ``clufter`` and its output you are), you can
+either reason about each command, possibly making correction in due
+course (well, ``clufter`` never had ambitions to be fully and reliably
+automagic), or just pipe that into the shell interpreter, for instance:
+
+.. code-block:: bash
+
+  $ ./run-dev ccs2pcscmd -gsq tests/filled.conf | sh -x
+
+which will also turn on echoing of what is being executed, just in case.
+
+Take this just as a showcase of the primary goal for this tool, there
+are many other realated conversion/analysis related tasks featured
+and discoverable as:
+
+.. code-block:: bash
+
+  $ ./run-dev -l
+
+
 Dependencies
 ~~~~~~~~~~~~
 
@@ -50,29 +96,44 @@ general:
   - 2.6 with `ordereddict`_ or some kind of ``collections.OrderedDict``
     backport (#929258) required
 
-- ``ccs_flatten``, embedded, originally ``pacemaker/extra/rgmanager``:
+- embedded ``ccs_flatten`` (originally `pacemaker.git/extra/rgmanager
+  <https://github.com/ClusterLabs/pacemaker/commit/6ef3f77>`_) compiled
+  helper
 
-.. code-block:: bash
-
-  ./configure --with-cman=1 && ( cd extra/rgmanager && make )
+  - suitable C compiler (``gcc``)
+  - ``libxml2``
 
 
 tests:
 
-- outside of Python 2.7+, `unittest2`_ (``python-unittest2``) is needed
+- outside of Python 2.7+, `unittest2`_ (``python-unittest2``)
+  or, alternatively, `nose`_ (``python-nose``) is needed
 
 .. _lxml: http://lxml.de
 .. _ordereddict: https://pypi.python.org/pypi/ordereddict
 .. _unittest2: https://pypi.python.org/pypi/unittest2
+.. _nose: https://pypi.python.org/pypi/nose
 
 
-Installation
-~~~~~~~~~~~~
+Stable version
+~~~~~~~~~~~~~~
 
-TBD
+Official released tarballs (as opposed to what you can `download from
+GitHub <https://github.com/jnpkrn/clufter/releases>`_) can be found,
+together with GPG signatures,
+at https://pagure.io/releases/clufter/ or, alternatively,
+at https://people.redhat.com/jpokorny/pkgs/clufter/.
+
+Also, the ``HEAD`` of ``master`` branch in the repository should always
+point to the latest stable, tagged (and GPG-signed, for that matter)
+release.  Current status of the test run using Travis CI against
+this branch:
 
 .. image:: https://travis-ci.org/jnpkrn/clufter.svg?branch=master
   :target: https://travis-ci.org/jnpkrn/clufter
+
+.. image:: https://coveralls.io/repos/jnpkrn/clufter/badge.svg?branch=master&service=github
+  :target: https://coveralls.io/github/jnpkrn/clufter?branch=master
 
 
 Development version
@@ -82,6 +143,9 @@ TBD
 
 .. image:: https://travis-ci.org/jnpkrn/clufter.svg?branch=next
   :target: https://travis-ci.org/jnpkrn/clufter
+
+.. image:: https://coveralls.io/repos/jnpkrn/clufter/badge.svg?branch=next&service=github
+  :target: https://coveralls.io/github/jnpkrn/clufter?branch=next
 
 
 ---------------
@@ -104,3 +168,16 @@ to or referred from some relevant file like ``~/.bashrc``, or when
 ``bash-completion`` package installed, stored to ``~/.config/bash_completion``
 (per-user) or ``/usr/share/bash-completion/bash_completion`` (system-wide).
 It's also possible this is already performed on the packaging level.
+
+
+---------
+ Contact
+---------
+
+Common cluster/HA channels falling under `ClusterLabs`_ umbrella:
+
+- `users dedicated mailing list`_
+- ``#clusterlabs`` channel at Freenode IRC server
+
+.. _ClusterLabs: http://clusterlabs.org/
+.. _users dedicated mailing list: http://oss.clusterlabs.org/mailman/listinfo/users

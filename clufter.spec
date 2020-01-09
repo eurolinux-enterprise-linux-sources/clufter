@@ -1,16 +1,24 @@
 Name:           clufter
-Version:        0.11.2
+Version:        0.56.2
 Release:        1%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
 License:        GPLv2+
-URL:            https://github.com/jnpkrn/%{name}
+URL:            https://pagure.io/%{name}
 
 BuildRequires:  python2-devel
 BuildRequires:  python-setuptools
 BuildRequires:  python-lxml
+# following for nosetests
+BuildRequires:  python-nose
+# following for UpdateTimestamps sanitization function
+#BuildRequires:  diffstat
+
+#global test_version
+%global testver      %{?test_version}%{?!test_version:%{version}}
 
 Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{version}.tar.gz
+Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
 
 %description
 While primarily aimed at (CMAN,rgmanager)->(Corosync/CMAN,Pacemaker) cluster
@@ -94,7 +102,28 @@ configuration: either experimental commands or internally unused, reusable
 formats and filters.
 
 %prep
-%setup
+%setup -b 1
+
+%if "%{testver}" != "%{version}"
+    %{__cp} -a ../"%{name}-%{testver}"/* .
+%endif
+
+## -- following borrowed from python-simplejon.el5 --
+## Update timestamps on the files touched by a patch, to avoid non-equal
+## .pyc/.pyo files across the multilib peers within a build, where "Level"
+## is the patch prefix option (e.g. -p1)
+#UpdateTimestamps() {
+#  Level=$1
+#  PatchFile=$2
+#  # Locate the affected files:
+#  for f in $(diffstat $Level -l $PatchFile); do
+#    # Set the files to have the same timestamp as that of the patch:
+#    touch -r $PatchFile $f
+#  done
+#}
+#
+#patch0 -p1
+#UpdateTimestamps -p1 %{PATCH0}
 
 ## for some esoteric reason, the line above has to be empty
 %{__python} setup.py saveopts -f setup.cfg pkg_prepare \
@@ -102,15 +131,54 @@ formats and filters.
                       --editor='%{_bindir}/nano' \
                       --ra-metadata-dir='%{_datadir}/cluster' \
                       --ra-metadata-ext='metadata'
+%{__python} setup.py saveopts -f setup.cfg pkg_prepare \
+--report-bugs='https://bugzilla.redhat.com/enter_bug.cgi?product=Red%20Hat%20Enterprise%20Linux%206&component=clufter'
 
 %build
 %{__python} setup.py build
 ./run-dev --skip-ext --completion-bash 2>/dev/null \
   | sed 's|run[-_]dev|%{name}|g' > .bashcomp
+# generate man pages (proper commands and aliases from a sorted sequence)
 %{__mkdir_p} -- .manpages/man1
-help2man -N -h -H -n "$(sed -n '2s|[^(]\+(\([^)]\+\))|\1|p' README)" ./run-dev \
-  | sed 's|run[-_]dev|%{name}|g' \
-  > .manpages/man1/%{name}.1
+{ echo; ./run-dev -l | sed -n 's|^  \(\S\+\).*|\1|p' | sort; } > .subcmds
+sed -e 's:\(.\+\):\\\&\\fIrun_dev-\1\\fR\\\|(1), :' \
+  -e '1s|\(.*\)|\[SEE ALSO\]\n|' \
+  -e '$s|\(.*\)|\1\nand perhaps more|' \
+  .subcmds > .see-also
+help2man -N -h -H -i .see-also \
+  -n "$(sed -n '2s|[^(]\+(\([^)]\+\))|\1|p' README)" ./run-dev \
+  | sed 's|run\\\?[-_]dev|%{name}|g' \
+  > ".manpages/man1/%{name}.1"
+while read cmd; do
+  [ -n "${cmd}" ] || continue
+  echo -e "#\!/bin/sh\n{ [ \$# -ge 1 ] && [ \"\$1\" = \"--version\" ] \
+  && ./run-dev \"\$@\" || ./run-dev \"${cmd}\" \"\$@\"; }" > ".tmp-${cmd}"
+  chmod +x ".tmp-${cmd}"
+  grep -v "^${cmd}\$" .subcmds \
+    | grep -e '^$' -e "$(echo ${cmd} | cut -d- -f1)\(-\|\$\)" \
+    | sed -e 's:\(.\+\):\\\&\\fIrun_dev-\1\\fR\\\|(1), :' \
+      -e '1s|\(.*\)|\[SEE ALSO\]\n\\\&\\fIrun_dev\\fR\\\|(1), \n|' \
+      -e '$s|\(.*\)|\1\nand perhaps more|' > .see-also
+  # XXX uses ";;&" bashism
+  case "${cmd}" in
+  ccs[2-]*)
+    sed -i \
+      '1s:\(.*\):\1\n\\\&\\fIcluster.conf\\fR\\\|(5), \\\&\\fIccs\\fR\\\|(7), :' \
+    .see-also
+    ;;&
+  ccs2pcs*)
+    sed -i \
+      '1s:\(.*\):\1\n\\\&\\fI%{_defaultdocdir}/%{name}-%{version}/rgmanager-pacemaker\\fR\\\|, :' \
+    .see-also
+    ;;&
+  *[2-]pcscmd*)
+    sed -i '1s:\(.*\):\1\n\\\&\\fIpcs\\fR\\\|(8), :' .see-also
+    ;;&
+  esac
+  help2man -N -h -H -i .see-also -n "${cmd}" "./.tmp-${cmd}" \
+    | sed 's|run\\\?[-_]dev|%{name}|g' \
+  > ".manpages/man1/%{name}-${cmd}.1"
+done < .subcmds
 
 %install
 
@@ -145,10 +213,10 @@ cat >.bashcomp-files <<-EOF
 	%verify(not size md5 mtime) %{_sysconfdir}/%{name}/bash-completion
 EOF
 %{__mkdir_p} -- '%{buildroot}%{_mandir}'
-%{__cp} -a -- .manpages/* '%{buildroot}%{_mandir}'
+%{__cp} -a -t '%{buildroot}%{_mandir}' -- .manpages/*
 %{__mkdir_p} -- '%{buildroot}%{_defaultdocdir}/%{name}-%{version}'
-%{__install} -pm 644 -- gpl-2.0.txt doc/*.txt \
-                        '%{buildroot}%{_defaultdocdir}/%{name}-%{version}'
+%{__cp} -a -t '%{buildroot}%{_defaultdocdir}/%{name}-%{version}' \
+           -- gpl-2.0.txt doc/*.txt doc/rgmanager-pacemaker
 
 %check
 # just a basic sanity check
@@ -158,7 +226,7 @@ declare ret=0 \
         ccs_flatten_dir="$(dirname '%{buildroot}%{_libexecdir}/%{name}-%{version}/ccs_flatten')"
 ln -s '%{buildroot}%{_datadir}/cluster'/*.'metadata' \
       "${ccs_flatten_dir}"
-PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-check
+PATH="${PATH:+${PATH}:}${ccs_flatten_dir}" ./run-tests
 ret=$?
 %{__rm} -f -- "${ccs_flatten_dir}"/*.'metadata'
 [ ${ret} -eq 0 ] || exit ${ret}
@@ -193,10 +261,12 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{python_sitelib}/%{name}/__main__.py*
 %{python_sitelib}/%{name}/main.py*
 %{python_sitelib}/%{name}/completion.py*
+# only useful here, rest of egg-info pulled through internal dependency
+%{python_sitelib}/%{name}-*.egg-info/entry_points.txt
 
 %files -n python-%{name}
 %dir %{_defaultdocdir}/%{name}-%{version}
-%{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]].txt
+%{_defaultdocdir}/%{name}-%{version}/*[^[:digit:]]
 %doc %{_defaultdocdir}/%{name}-%{version}/*[[:digit:]].txt
 %exclude %{python_sitelib}/%{name}/__main__.py*
 %exclude %{python_sitelib}/%{name}/main.py*
@@ -204,6 +274,8 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %exclude %{python_sitelib}/%{name}/ext-plugins/*/
 %{python_sitelib}/%{name}
 %{python_sitelib}/%{name}-*.egg-info
+# entry_points.txt only useful for -cli package
+%exclude %{python_sitelib}/%{name}-*.egg-info/entry_points.txt
 %{_libexecdir}/%{name}-%{version}
 %{_datadir}/cluster
 
@@ -217,6 +289,30 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{python_sitelib}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Fri Mar 18 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.56.2-1
+- move entry_points.txt to clufter-cli sub-package
+- bump upstream package, see
+  https://github.com/jnpkrn/clufter/releases/tag/v0.56.2
+
+* Tue Feb 09 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.56.1-1
+- bump upstream package, see
+  https://github.com/jnpkrn/clufter/releases/tag/v0.56.1
+
+* Mon Feb 01 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.56.0-1
+- general spec file refresh (pagure.io as a default project base, etc.)
+- bump upstream package, see
+  https://github.com/jnpkrn/clufter/releases/tag/v0.56.0
+
+* Tue Dec 22 2015 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.55.0-3
+- auto-generate SEE ALSO sections for the man pages
+- utilize test suite in the check phase of the build process
+- bump upstream package (intentional jump on upstream front),
+  see https://github.com/jnpkrn/clufter/releases/tag/v0.55.0
+
+* Thu Oct 08 2015 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.50.5-1
+- generate man pages also for built-in commands
+- bump upstream package
+
 * Fri May 29 2015 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.11.2-1
 - move completion module to clufter-cli sub-package
 - bump upstream package

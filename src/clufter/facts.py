@@ -44,8 +44,12 @@ cluster_map = {
                     'pacemaker[coro,hb]':            (1, 1, 7),
                 }),
                 ((8, ), {
-                    # https://packages.debian.org/jessie/corosync (?)
+                    # https://packages.debian.org/jessie/corosync
                     'corosync':                      (1, 4, 6),
+                }),
+                ((9, ), {
+                    # https://packages.debian.org/stretch/corosync
+                    'corosync':                      (2, 3, 5),
                 }),
             ),
             'fedora': (
@@ -64,18 +68,34 @@ cluster_map = {
                 ((17, ), {
                     'corosync':                      (2, 3),
                     'pacemaker[coro]':               (1, 1, 7),
+                    'pcs':                           (0, 9, 1),
                 }),
                 ((18, ), {
                     'pacemaker[coro]':               (1, 1, 8),
+                    'pcs':                           (0, 9, 27),
                 }),
                 ((19, ), {
                     'pacemaker[coro]':               (1, 1, 9),
+                    'pcs':                           (0, 9, 34),
                     #---
                     # https://fedoraproject.org/wiki/Features/ReplaceMySQLwithMariaDB
                     'pkg::mysql':                   'mariadb-server',
                 }),
+                ((20, ), {
+                    'pcs':                           (0, 9, 44),
+                }),
                 ((21, ), {
                     'pacemaker[coro]':               (1, 1, 11),
+                    'pcs':                           (0, 9, 115),
+                }),
+                ((22, ), {
+                    'pcs':                           (0, 9, 139),
+                    #---
+                    # https://fedoraproject.org/wiki/Changes/ReplaceYumWithDNF
+                    'cmd::pkg-install':             'dnf install -y {packages}',
+                }),
+                ((23, ), {
+                    'pacemaker[coro]':               (1, 1, 13),
                 }),
             ),
             'redhat': (
@@ -92,20 +112,39 @@ cluster_map = {
                 ((6, 2), {
                     'corosync':                      (1, 4),
                 }),
+                ((6, 4), {
+                    'pcs':                           (0, 9, 26),
+                }),
                 ((6, 5), {
                     'pacemaker[cman]':               (1, 1, 10),
+                    'pcs':                           (0, 9, 90),
                 }),
                 ((6, 6), {
                     'pacemaker[acls,cman]':          (1, 1, 11),
+                    'pcs':                           (0, 9, 123),
+                }),
+                ((6, 7), {
+                    'pacemaker[acls,cman]':          (1, 1, 12),
+                    'pcs':                           (0, 9, 139),
+                }),
+                ((6, 8), {
+                    # u9n := utilization
+                    'pcs[u9n]':                      (0, 9, 148),  # XXX guess
                 }),
                 ((7, 0), {
                     'corosync':                      (2, 3),
                     'pacemaker[coro]':               (1, 1, 10),
+                    'pcs':                           (0, 9, 115),
                     #---
                     'pkg::mysql':                   'mariadb-server',
                 }),
                 ((7, 1), {
                     'pacemaker[acls,coro]':          (1, 1, 12),
+                    'pcs':                           (0, 9, 137),
+                }),
+                ((7, 2), {
+                    'pacemaker[acls,coro]':          (1, 1, 13),
+                    'pcs':                           (0, 9, 143),
                 }),
             ),
             'ubuntu': (
@@ -119,16 +158,21 @@ cluster_map = {
                     'corosync':                      (2, 3),
                     'pacemaker[coro,hb]':            (1, 1, 10),
                 }),
+                ((15, 04), {
+                    # https://packages.ubuntu.com/vivid/{corosync,pacemaker}
+                    'pacemaker[coro,hb]':            (1, 1, 12),
+                }),
             ),
         },
 }
 
 # mere aliases of the distributions (packages remain the same),
 # i.e., downstream rebuilders;
-# values in this dict should correspond to output of
-# `platform.linux_distribution(full_distribution_name=0)`
-# and the dict can contain also associate keys obtained as
+# values (and keys when making "alias" association) in this dict should
+# correspond to `platform.linux_distribution(full_distribution_name=0)` output
+# and the dict can contain also associated keys obtained as
 # `platform.linux_distribution(full_distribution_name=1).lower()`
+# or, on top of previous, what's expected to be entered by the user
 aliases_dist = {
     # aliases
     # XXX platform.linux_distribution(full_distribution_name=0), i.e.,
@@ -136,6 +180,8 @@ aliases_dist = {
     'centos': 'redhat',
     # full_distribution_name=1 (lower-cased) -> full_distribution_name=0
     'red hat enterprise linux server': 'redhat',
+    # convenience/choice of common sense or intuition
+    'rhel': 'redhat',
 }
 
 # in the queries, one can use following aliases to wildcard versions
@@ -148,11 +194,16 @@ aliases_releases = {
     'debian': {  # because of http://bugs.python.org/issue9514 @ 2.6 ?
         'squeeze':    '6',
         'wheezy':     '7',
-        'wheezy/sid': '7.999',
+        'wheezy/sid': '7.999',  # XXX ?
+        'jessie':     '8',
     },
     'ubuntu': {
-        'raring':     '13.04',
-        'saucy':      '13.10',
+        'raring':     '13.04',  # Raring Ringtail
+        'saucy':      '13.10',  # Saucy Salamander
+        'trusty':     '14.04',  # Trusty Tahr
+        'utopic':     '14.10',  # Utopic Unicorn
+        'vivid':      '15.04',  # Vivid Vervet
+        'wily':       '15.10',  # Wily Werewolf
     }
 }
 

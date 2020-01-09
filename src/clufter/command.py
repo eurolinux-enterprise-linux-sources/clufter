@@ -1,5 +1,5 @@
 # -*- coding: UTF-8 -*-
-# Copyright 2015 Red Hat, Inc.
+# Copyright 2016 Red Hat, Inc.
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 """Base command stuff (TBD)"""
@@ -25,10 +25,10 @@ from .format import FormatError, SimpleFormat
 from .plugin_registry import PluginRegistry
 from .protocol import protodictval
 from .utils import any2iter, \
+                   areinstancesupto, \
                    arg2wrapped, \
                    args2tuple, \
                    filterdict_keep, \
-                   func_defaults_varnames, \
                    head_tail, \
                    hybridproperty, \
                    nonetype, \
@@ -99,6 +99,18 @@ class Command(object):
             return None
         self = super(Command, cls).__new__(cls)
         self._filter_chain = filter_chain
+        self._filters = OrderedDict((f.__class__.name, f) for f in
+                                    apply_intercalate(filter_chain))
+        fnc_defaults, fnc_varnames = self._fnc_defaults_varnames
+        for varname, default in fnc_defaults.iteritems():
+            if not isinstance(default, basestring):
+                continue
+            try:
+                # early/static interpolation of defaults ~ filters' constants
+                fnc_defaults[varname] = default.format(**self._filters)
+            except AttributeError:
+                pass
+        self._fnc_defaults_varnames = fnc_defaults, fnc_varnames
         # following will all be resolved lazily, on-demand;
         # all of these could be evaluated upon instantiation immediately,
         # but this is not the right thing to do due to potentially many
@@ -214,22 +226,11 @@ class Command(object):
     # self-introspection (arguments, description, options)
     #
 
-    def _figure_fnc_defaults_varnames(self):
-        """Dissect self._fnc to arg defaults (dict) + all arg names (tuple)"""
-        # XXX deprecated, _fnc_defaults_varnames set on the "birth" of class
-        try:
-            fnc = self._fnc
-        except:
-            raise CommandError(self, "Subclass does not implement _fnc")
-        if self._fnc_defaults_varnames is None:
-            self._fnc_defaults_varnames = func_defaults_varnames(fnc, skip=1)
-        return self._fnc_defaults_varnames
-
     def _figure_parser_opt_dumpnoop(self, options, shortopts):
         choices = []
-        for f in apply_intercalate(self.filter_chain):
+        for fname, f in self._filters.iteritems():
             if issubclass(f.in_format.__class__, f.out_format.__class__):
-                choices.append(f.__class__.name)
+                choices.append(fname)
         # XXX NOOPizing doesn't make sense for input filters?
         debug_opts = (
             ('noop', False,
@@ -256,17 +257,15 @@ class Command(object):
         # unofficial/unsupported ones
         for var in fnc_varnames:
             optname_used = cli_decor(var)
-            short_aliases = shortopts.setdefault(optname_used[0], [])
-            assert optname_used not in \
-                   (options[i][0][0] for i in short_aliases)
-            options.append([["--" + optname_used], dict(\
+            options.append([["--" + optname_used], dict(
                 expert=True,
                 help="(undocumented expert option)",
             )])
 
     def _figure_parser_desc_opts(self, fnc_defaults, fnc_varnames,
                                  opt_group=None):
-        readopts, common_tail, shortopts, options = False, False, {}, []
+        readopts, common_tail = False, False
+        shortopts, options, expert =  {}, [], []
         description = []
         fnc_varnames = set(fnc_varnames)
         opt_group = opt_group or OptionParser()
@@ -284,17 +283,21 @@ class Command(object):
                 if not all((optname, optdesc)) or optname not in fnc_varnames:
                     log.warning("Bad option line: {0}".format(line))
                 else:
-                    optname_used = cli_decor(optname)
+                    target = expert if optname.startswith('_') else options
+                    optname_used = cli_decor(optname.lstrip('_'))
                     log.debug("Command `{0}', found option `{1}' ({2})".format(
                         self.__class__.name, optname_used, optname
                     ))
                     fnc_varnames.remove(optname)
                     short_aliases = shortopts.setdefault(optname_used[0], [])
-                    if not common_tail:
+                    opt = {}
+                    if target is expert:
+                        opt['expert'] = True
+                        opt['dest'] = optname  # (un)decor just works, '_' not
+                    elif not common_tail:
                         assert optname_used not in \
                             (options[i][0][0] for i in short_aliases)
                         short_aliases.append(len(options))  # as an index
-                    opt = {}
                     opt['help'] = optdesc[0].strip()
                     if optname in fnc_defaults:  # default if known
                         default = fnc_defaults[optname]
@@ -306,7 +309,7 @@ class Command(object):
                         else:
                             opt['help'] += " [%default]"
                         opt['default'] = default
-                    options.append([["--" + optname_used], opt])
+                    target.append([["--" + optname_used], opt])
             elif line.lower().startswith(CMD_HELP_OPTSEP_PRIMARY):
                 readopts = True
             else:
@@ -327,6 +330,7 @@ class Command(object):
                 options[alias][0].append(use)
 
         self._figure_parser_opt_dumpnoop(options, shortopts)
+        options.extend(expert)
         self._figure_parser_opt_unofficial(options, shortopts, fnc_varnames)
 
         description = description[:-1] if not description[-1] else description
@@ -337,7 +341,7 @@ class Command(object):
         """Parse docstring as description + Option constructor args list"""
         if self._desc_opts is None:
             self._desc_opts = self._figure_parser_desc_opts(
-                *self._figure_fnc_defaults_varnames(), opt_group=opt_group
+                *self._fnc_defaults_varnames, opt_group=opt_group
             )
         return self._desc_opts
 
@@ -378,8 +382,7 @@ class Command(object):
                     )
         return to_check
 
-    @classmethod
-    def _iochain_proceed(cls, cmd_ctxt, io_chain):
+    def _iochain_proceed(self, cmd_ctxt, io_chain):
         # currently works sequentially, jumping through the terminals in-order;
         # when any of them (apparently the output one) hasn't its prerequisites
         # (i.e., input data) satisfied, the run is restarted with first
@@ -397,7 +400,7 @@ class Command(object):
         terminal_chain = cmd_ctxt['filter_chain_analysis']['terminal_chain']
         terminals = apply_intercalate(terminal_chain)
 
-        terminal_chain = cls._iochain_check_terminals(io_chain, terminal_chain)
+        terminal_chain = self._iochain_check_terminals(io_chain, terminal_chain)
 
         native_fds = dict((f.fileno(), f) for f in (stderr, stdin, stdout))
         magic_fds = native_fds.copy()
@@ -406,10 +409,7 @@ class Command(object):
                                            partitioner=lambda x:
                                            not (tuplist(x)) or protodecl(x))))
         # if any "EMPTY" (zip_empty) value present, respective class name ~ str
-        maxl = len(sorted(worklist, key=lambda x: len(x[0].__class__.__name__)
-                         )[-1][0].__class__.__name__)
         unused, tstmp = {}, hex(int(time()))[2:]
-        cmd_ctxt['maxl'] = maxl
         while worklist:
             workitem = worklist.pop()
             if workitem == zip_empty:
@@ -481,17 +481,12 @@ class Command(object):
                             )
                             ret(SimpleFormat.FILE, fn)
                         except FormatError:
-                            cmd_ctxt['svc_output'](
-                                "|header:[{0:{1}}]| dumping failed"
-                                .format(flt.__class__.name, maxl),
-                                base='error',
-                                urgent=True
-                            )
+                            flt_ctxt.ctxt_svc_output("dumping failed",
+                                                     base='error', urgent=True)
                         else:
-                            cmd_ctxt['svc_output'](
-                                "|header:[{0:{1}}]| dump file: |highlight:{2}|"
-                                .format(flt.__class__.name, maxl, fn)
-                            )
+                            flt_ctxt.ctxt_svc_output("|subheader:dump:|"
+                                                     " |highlight:{0}|"
+                                                     .format(fn))
                     continue
             # output time!  (INFILTER terminal listed twice in io_chain)
             with cmd_ctxt.prevented_taint():
@@ -502,10 +497,8 @@ class Command(object):
             # store output somewhere, which even can be useful (use as a lib)
             passout['passout'] = flt_ctxt['out'](*io_decl)
             if passout is unused and io_decl[0] == SimpleFormat.FILE:
-                cmd_ctxt['svc_output'](
-                    "|header:[{0:{1}}]| output file: |highlight:{2}|"
-                    .format(flt.__class__.name, maxl, passout['passout'])
-                )
+                flt_ctxt.ctxt_svc_output("|subheader:output:| |highlight:{0}|"
+                                         .format(passout['passout']))
 
         # close "magic" fds
         map(lambda (k, f): k in native_fds or f.close(), magic_fds.iteritems())
@@ -514,18 +507,50 @@ class Command(object):
     def __call__(self, opts, args=None, cmd_ctxt=None):
         """Proceed the command"""
         ec = EC.EXIT_SUCCESS
-        fnc_defaults, fnc_varnames = self._figure_fnc_defaults_varnames()
+        maxl = len(sorted(self._filters, key=len)[-1])
+        cmd_ctxt = cmd_ctxt or CommandContext({
+            'filter_chain_analysis': self.filter_chain_analysis,
+            'filter_noop':           getattr(opts, 'noop', ()),
+            'filter_dump':           getattr(opts, 'dump', ()),
+            'system':                getattr(opts, 'sys', ''),
+            'system_extra':          getattr(opts, 'dist', '').split(','),
+            'svc_output':            FancyOutput(f=stderr,
+                                                 quiet=getattr(opts, 'quiet',
+                                                               False),
+                                                 prefix=("|header:[{{0:{0}}}]| "
+                                                         .format(maxl)),
+                                                 color=dict(auto=None,
+                                                            never=False,
+                                                            always=True)[
+                                                                getattr(opts,
+                                                                        'color',
+                                                                        'auto')
+                                                            ]
+                                     ),
+        }, bypass=True)
+        cmd_ctxt.ensure_filters(self._filters.itervalues())
         kwargs = {}
         # desugaring, which is useful mainly if non-contiguous sequence
         # of value-based options need to be specified
         args = [None if not a else a for a in args[0].split('::')] + args[1:] \
                if args else []
         args.reverse()  # we will be poping from the end
-        for v in fnc_varnames:
-            default = fnc_defaults.get(v, None)
+        for v in self._fnc_defaults_varnames[1]:
+            default = self._fnc_defaults_raw.get(v, None)
             opt = getattr(opts, v, default)
-            if opt != default and isinstance(opt, (type(default),
-                                                   MutableMapping)):
+            if isinstance(opt, basestring):
+                try:
+                    opt = opt.format(**cmd_ctxt['__filters__'])
+                    # XXX type adjustment at least for bool?
+                except (AttributeError, ValueError, KeyError):
+                    # AttributeError ~ may be available later on,
+                    #                  resolved in io_decl_specials
+                    pass
+            if isinstance(opt, MutableMapping) \
+                    or not isinstance(default, basestring) \
+                        and isinstance(opt, basestring) \
+                    or areinstancesupto(opt, default, object, type) \
+                        and opt != default:
                 kwargs[v] = opt
                 continue
             elif not isinstance(opt, (basestring, type(None))):
@@ -551,25 +576,6 @@ class Command(object):
                                                             for a in args)))
         log.debug("Running command `{0}';  args={1}, kwargs={2}"
                   .format(self.__class__.name, args, kwargs))
-        cmd_ctxt = cmd_ctxt or CommandContext({
-            'filter_chain_analysis': self.filter_chain_analysis,
-            'filter_noop':           getattr(opts, 'noop', ()),
-            'filter_dump':           getattr(opts, 'dump', ()),
-            'system':                getattr(opts, 'sys', ''),
-            'system_extra':          getattr(opts, 'dist', '').split(','),
-            'svc_output':            FancyOutput(f=stderr,
-                                                 quiet=getattr(opts, 'quiet',
-                                                               False),
-                                                 color=dict(auto=None,
-                                                            never=False,
-                                                            always=True)[
-                                                                getattr(opts,
-                                                                        'color',
-                                                                        'auto')
-                                                            ]
-                                     ),
-        }, bypass=True)
-        cmd_ctxt.ensure_filters(apply_intercalate(self._filter_chain))
         io_driver = any2iter(self._fnc(cmd_ctxt, **kwargs))
         io_handler = (self._iochain_proceed, lambda c, ec=EC.EXIT_SUCCESS: ec)
         io_driver_map = izip_longest(io_driver, io_handler)
@@ -700,6 +706,7 @@ class Command(object):
                 '_filter_chain': filter_chain,
                 '_fnc': staticmethod(wrapped),
                 '_fnc_defaults_varnames': (fnc_defaults, fnc_varnames),
+                '_fnc_defaults_raw': fnc_defaults.copy(),  # un-interpolated
             }
             # optimization: shorten type() -> new() -> probe
             ret = cls.probe(fnc.__name__, (cls, ), attrs)

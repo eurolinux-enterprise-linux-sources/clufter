@@ -177,14 +177,13 @@ class PluginRegistry(type):
 
         Context is a pair `(path, list_of_per_path_tracked_plugins_so_far)`.
         """
-        if paths is None:
-            return  # explictly asked not to use even implicit path
-        # inject implicit one
-        paths = (p for p in (
-                     join(p, registry.__name__) for p
-                     in args2tuple(dirname(abspath(__file__)),
-                                   *args2sgpl(paths))
-                 ) if isdir(p))
+        paths = args2sgpl(paths)
+        if paths and paths[0] is None:  # injection of implicit path prevented
+            paths = paths[1:]
+        else:  # injection happens
+            paths = args2tuple(dirname(abspath(__file__)), *paths)
+        paths = (p for p in (join(p, registry.__name__) for p in paths)
+                 if isdir(p))
 
         for path in paths:
             with registry._path(path) as context:
@@ -284,7 +283,7 @@ class PluginManager(object):
         to_discover.difference_update(ret.iterkeys())
         native_plugins = registry.native_plugins
         ret.update(filterdict_remove(to_discover,
-                                     fn=lambda x: native_plugins[x],
+                                     _fn_=lambda x: native_plugins[x],
                                      *native_plugins.keys()))
         to_discover = apply_intercalate(tuple(to_discover))
         if to_discover:

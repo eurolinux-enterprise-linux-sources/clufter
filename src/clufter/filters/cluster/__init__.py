@@ -15,8 +15,8 @@ except ValueError:  # Value?
 ccs_propagate_cman = '''\
     <xsl:template match="cman/@*[not(
 ''' + (
-                        xslt_is_member('.', ('cman',
-                                             'expected_votes'))
+                        xslt_is_member('name()', ('two_node',
+                                                  'expected_votes'))
 ) + ''')] | cman/altmulticast
           | cman/multicast"/>
 
@@ -312,8 +312,10 @@ ccs2needlexml = lazystring(lambda: ('''\
 
 try:
     from .... import package_name, version
+    from ....utils_xslt import xslt_id_friendly
 except ValueError:
     from ... import package_name, version
+    from ...utils_xslt import xslt_id_friendly
 ccsflat2cibprelude_self_id = "{0} {1}".format(package_name(), version)
 
 # should roughly match the output of:
@@ -385,7 +387,12 @@ ccsflat2cibprelude = ('''\
                             <xsl:variable name="Prefix">
                                 <xsl:value-of select="concat('FENCEINST-', @name, '-NODE-', $NodeName)"/>
                                 <xsl:if test="@port">
-                                    <xsl:value-of select="concat('-', @port)"/>
+                                    <xsl:value-of select="concat(
+                                        '-',
+''' + (
+                                        xslt_id_friendly('@port')
+) + '''
+                                    )"/>
                                 </xsl:if>
                             </xsl:variable>
                             <primitive id="{$Prefix}"
@@ -436,7 +443,7 @@ ccsflat2cibprelude = ('''\
 
             <fencing-topology>
             <xsl:for-each select="clusternodes/clusternode[
-                                      count(fence/method) &gt; 1
+                                      count(fence/method[device]) &gt; 1
                                       or
                                       fence/method[
                                           count(device) &gt; 1
@@ -523,9 +530,7 @@ ccs_revitalize = '''\
 
 ###
 
-ccs2ccs_pcmk = '''\
-    <clufter:descent-mix preserve-rest="true"/>
-
+ccs_version_bump = '''\
     <!-- CLUSTER config version bump -->
     <xsl:template match="cluster/@config_version">
         <xsl:attribute name="{name()}">
@@ -539,7 +544,6 @@ ccs2ccs_pcmk = '''\
 # check http://stackoverflow.com/questions/4509662/how-to-generate-unique-string
 # XXX device/@port for: fence_pcmk, fence_rhevm, fence_virsh, fence_{virt,xvm},
 #                       fence_vmware{,_soap} (?)
-# XXX cluster/@alias (not el6)
 ccs_obfuscate_identifiers = '''\
     <clufter:descent-mix preserve-rest="true"/>
 
@@ -548,6 +552,14 @@ ccs_obfuscate_identifiers = '''\
     <xsl:template match="cluster/@name">
         <xsl:attribute name="{name()}">
             <xsl:value-of select="'CLUSTER-NAME'"/>
+        </xsl:attribute>
+    </xsl:template>
+
+    <!-- XXX: CLUSTER-ALIAS (not in el6 schemas) -->
+
+    <xsl:template match="cluster/@alias">
+        <xsl:attribute name="{name()}">
+            <xsl:value-of select="'CLUSTER-ALIAS'"/>
         </xsl:attribute>
     </xsl:template>
 
@@ -563,9 +575,9 @@ ccs_obfuscate_identifiers = '''\
                   select="cluster/clusternodes/clusternode[@name]"/>
     <xsl:template match="
         cluster/clusternodes/clusternode/@name
-        |cluster/clusternodes/clusternode/fence/method/device/@nodename
-        |cluster/clusternodes/clusternode/fence/method/device/@port
-        |cluster/rm/failoverdomains/failoverdomain/failoverdomainnode/@name">
+        |cluster/clusternodes/clusternode/altname/@name
+        |cluster/rm/failoverdomains/failoverdomain/failoverdomainnode/@name
+        |cluster/clusternodes/clusternode//device/@*[name() != 'name']">
         <xsl:variable name="ClusterNodeMatch"
                       select="$ClusterNode[
                                   translate(@name, $AlphaUpper, $AlphaLower)
@@ -578,12 +590,27 @@ ccs_obfuscate_identifiers = '''\
                     <!-- 1+ match(es) found -->
                     <xsl:value-of select="concat(
                         'CLUSTER-NODE-',
-                        count($ClusterNodeMatch/preceding-sibling::clusternode) + 1
+                        1 + count(
+                            $ClusterNodeMatch/preceding-sibling::*[
+                                count(.|$ClusterNode) = count($ClusterNode)
+                            ]
+                        )
                     )"/>
                 </xsl:when>
-                <xsl:when test="name() = 'port'">
-                    <!-- conservative approach with @port -->
+                <xsl:when test="name() != 'name'">
+                    <!-- rest of non-name ~ (un)fence device attributes -->
                     <xsl:value-of select="."/>
+                </xsl:when>
+                <xsl:when test="name(..) = 'altname'">
+                    <!-- altname case, further customized prefix -->
+                    <xsl:value-of select="concat(
+                        'CLUSTER-NODE-ALT-',
+                        1 + count(
+                            ../../preceding-sibling::*[
+                                count(.|$ClusterNode) = count($ClusterNode)
+                            ]
+                        )
+                    )"/>
                 </xsl:when>
                 <xsl:otherwise>
                     <!-- probably refential integrity error -->
@@ -602,7 +629,8 @@ ccs_obfuscate_identifiers = '''\
                   select="cluster/fencedevices/fencedevice[@name]"/>
     <xsl:template match="
         cluster/fencedevices/fencedevice/@name
-        |cluster/clusternodes/clusternode/fence/method/device/@name">
+        |cluster/clusternodes/clusternode/fence/method/device/@name
+        |cluster/clusternodes/clusternode/unfence/device/@name">
         <xsl:variable name="FenceDeviceMatch"
                       select="$FenceDevice[
                                   @name
@@ -634,43 +662,8 @@ ccs_obfuscate_identifiers = '''\
 
 # following 2nd chance import is to allow direct usage context (testing, etc.)
 try:
-    from ....utils_xslt import NL
-    from ....filters._2pcscmd import verbose_ec_test, verbose_inform
+    from ....filters._2pcscmd import coro2pcscmd
 except ValueError:  # Value?
-    from ...utils_xslt import NL
-    from ...filters._2pcscmd import verbose_ec_test, verbose_inform
+    from ...filters._2pcscmd import coro2pcscmd
 
-ccspcmk2pcscmd = ('''\
-    <xsl:if test="not($pcscmd_dryrun)">
-        <xsl:if test="not($pcscmd_noauth)">
-''' + (
-            verbose_inform('"auth cluster: ", @name')
-) + '''
-            <xsl:value-of select="'pcs cluster auth'"/>
-
-            <clufter:descent-mix at="clusternode"/>
-            <xsl:if test="$pcscmd_force">
-                <xsl:value-of select="' --force'"/>
-            </xsl:if>
-            <xsl:value-of select="'%(NL)s'"/>
-''' + (
-            verbose_ec_test
-) + '''
-        </xsl:if>
-''' + (
-        verbose_inform('"new cluster: ", @name')
-) + '''
-        <xsl:value-of select="concat('pcs cluster setup',
-                                     ' --name ', @name)"/>
-
-        <clufter:descent-mix at="clusternode"/>
-        <clufter:descent-mix at="cman"/>
-        <clufter:descent-mix at="totem"/>
-        <xsl:value-of select="'%(NL)s'"/>
-''' + (
-        verbose_ec_test
-) + '''
-    </xsl:if>
-''') % dict(
-    NL=NL,
-)
+ccspcmk2pcscmd = coro2pcscmd(cman='', node='clusternode', totem='')
