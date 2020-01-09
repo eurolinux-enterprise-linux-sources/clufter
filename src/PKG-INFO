@@ -1,12 +1,12 @@
 Metadata-Version: 1.1
 Name: clufter
-Version: 0.77.0
+Version: 0.77.1
 Summary: Tool/library for transforming/analyzing cluster configuration formats
 Home-page: https://github.com/jnpkrn/clufter
 Author: Jan Pokorný and plugin authors
 Author-email: jpokorny+pkg-clufter@redhat.com
 License: GPLv2+
-Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.77.0
+Download-URL: https://github.com/jnpkrn/clufter/tarball/v0.77.1
 Description: ==========================
          clufter (CLUster FilTER)
         ==========================
@@ -22,6 +22,7 @@ Description: ==========================
           framework (capable of XSLT) offers also other uses through its plugin library.
         
         And nope, the name is not a pun, typo or lisp-pronounced `cluster` per se :-P
+        As mentioned elsewhere, the project is pretty composite, just as its name is.
         
         Historical curiosity: ``clufter`` logotype should actually make ``f``
         look similar to ``ſ`` letter (`long s`__, in use some 200 years ago)

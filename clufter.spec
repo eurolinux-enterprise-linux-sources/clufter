@@ -4,15 +4,15 @@
 #   python2-clufter -> python-clufter
 
 Name:           clufter
-Version:        0.77.0
-Release:        2%{?dist}
+Version:        0.77.1
+Release:        1%{?dist}
 Group:          System Environment/Base
 Summary:        Tool/library for transforming/analyzing cluster configuration formats
 License:        GPLv2+
 URL:            https://pagure.io/%{name}
 
 # required for autosetup macro
-BuildRequires:  git
+#BuildRequires:  git
 
 # Python 2 related
 BuildRequires:  python2-devel
@@ -39,11 +39,10 @@ Source0:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{versio
 Source1:        https://people.redhat.com/jpokorny/pkgs/%{name}/%{name}-%{testver}-tests.tar.xz
 Source2:        https://pagure.io/%{name}/raw/v%{version}/f/misc/fix-jing-simplified-rng.xsl
 Source3:        https://pagure.io/%{name}/raw/v%{version}/f/misc/pacemaker-borrow-schemas
-Patch0:         https://pagure.io/clufter/c/a75e1456f11725b7a58bc81148a6d6403b2530d2.patch
 
 # for pacemaker BuildRequires dependency
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 ppc64le s390x
+ExclusiveArch: i686 x86_64 aarch64 ppc64le s390x
 %endif
 
 %description
@@ -156,12 +155,12 @@ formats and filters.
 %prep
 %setup -b 1
 #XXX cannot patch ccs-flatten this way
-pushd %{name} >/dev/null
-%global __scm git_am
-%{expand:%__scm_setup_%{__scm}}
-%{__git} config core.whitespace -blank-at-eol
-%autopatch -p1
-popd >/dev/null
+#pushd {name} >/dev/null
+#global __scm git_am
+#{expand:__scm_setup_{__scm}}
+#{__git} config core.whitespace -blank-at-eol
+#autopatch -p1
+#popd >/dev/null
 
 %if "%{testver}" != "%{version}"
     %{__cp} -a ../"%{name}-%{testver}"/* .
@@ -358,6 +357,11 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 %{_datarootdir}/%{name}/ext-plugins/lib-pcs
 
 %changelog
+* Fri Jun 08 2018 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.1-1
+- bump upstream package, see https://pagure.io/clufter/releases
+- build for aarch64
+  [rhbz#1569111]
+
 * Fri Dec 01 2017 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.77.0-2
 - fix nodelist.node.name configuration option (originaly devised by pacemaker)
   not supported in corosync.conf with the built-in validation schema
@@ -403,6 +407,7 @@ test -x '%{_bindir}/%{name}' && test -f "${bashcomp}" \
 * Fri Jul 22 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.59.0-1
 - add ability to borrow validation schemas from pacemaker installed along
 - bump upstream package, see https://pagure.io/clufter/releases
+- build for s390x
 
 * Fri Jul 15 2016 Jan Pokorný <jpokorny+rpm-clufter@redhat.com> - 0.58.0-1
 - fix Python interpreter propagated as enquoted string with old setuptools

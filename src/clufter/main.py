@@ -3,7 +3,9 @@
 # Part of clufter project
 # Licensed under GPLv2+ (a copy included | http://gnu.org/licenses/gpl-2.0.txt)
 
-from __future__ import print_function
+from __future__ import (print_function,
+                        absolute_import,  # for commands/std. library in PY2.6
+                        )
 
 """Machinery entry point"""
 __author__ = "Jan Pokorný <jpokorny @at@ Red Hat .dot. com>"
@@ -16,15 +18,20 @@ from os.path import basename, realpath
 # XXX should eventually switch/fallback to "distro" external package for
 # the latter (via https://bugzilla.redhat.com/1219172#c6, but see also #c9)
 from platform import system, linux_distribution
+try:
+    from subprocess import check_output
+    getoutput = lambda cmd: check_output(cmd, shell=True)
+except ImportError:
+    from commands import getoutput
 from sys import version
 
 from . import version_parts, version_text, description_text
 from .command_manager import CommandManager
 from .completion import Completion
 from .error import EC
-from .facts import aliases_dist, format_dists, supported_dists
+from .facts import aliases_dist, aliases_rel, format_dists, supported_dists
 from .utils import args2sgpl, head_tail, identity
-from .utils_2to3 import iter_items, xrange
+from .utils_2to3 import iter_items, str_enc, xrange
 from .utils_func import foreach
 from .utils_prog import ExpertOption, make_options, set_logging, which
 
@@ -38,10 +45,56 @@ else:
     if len(joint) < 70:
            report_bugs = (joint, )
 
+def _resolve_dist(sys, dist_name, *dist_ver, **kws):
+    # **kws: deferred_log=None
+    distro, version, recognized = dist_name, dist_ver, True
+    dl = kws.get("deferred_log", None)
+    dl = dl if dl is not None else []
+    for fn in (lambda x: x.lower(), lambda x: aliases_dist.get(x, x), identity):
+        if distro in supported_dists(sys):
+            if distro != dist_name:
+                dl.append((logging.INFO, "Distro `{0}' recognized as `{1}'"
+                                         .format(dist_name, distro)))
+            break
+        distro = fn(distro)
+    else:
+        recognized = False
+        dl.append((logging.WARNING, "Unrecognized distro `{0}' may lead to"
+                                    " unexpected results".format(dist_name)))
+    if not dist_ver:
+        dl.append((logging.WARNING, "Missing `{0}' distro version may lead to"
+                                    " unexpected results".format(dist_name)))
+    elif recognized:
+        version, version_rest = head_tail(version)
+        aliases_ver = aliases_rel.get(distro, {})
+        for fn in (lambda x: x.lower(), lambda x: aliases_ver.get(x, x), identity):
+            if version != dist_ver[0]:
+                dl.append((logging.INFO, "Version `{0}' recognized as `{1}'"
+                                         .format(dist_ver[0], version)))
+                break
+            version = fn(version)
+        else:
+            if version.strip("0123456789."):
+                dl.append((logging.WARNING, "Unrecognized non-numeric version"
+                                            " `{0}' may lead to unexpected"
+                                            " results".format(dist_ver[0])))
+        version = args2sgpl(version, *version_rest)
 
+    return args2sgpl(distro, *version)
+
+
+_deferred_log = []
 _system = system().lower()
-_system_extra = linux_distribution(full_distribution_name=0) \
-                if _system == 'linux' else ()
+_system_extra = (linux_distribution(full_distribution_name=0)
+                    if _system == 'linux'
+                 else (_system, str_enc(getoutput("/bin/freebsd-version -u"))
+                                .rsplit('-', 1)[0])
+                    if _system == 'freebsd'
+                 else ())
+if _system.endswith("bsd"):
+    _system = "bsd"
+_system_extra = _resolve_dist(_system, *_system_extra,
+                              **dict(deferred_log=_deferred_log))
 
 
 def parser_callback_help(option, opt_str, value, parser, arg=False, full=False):
@@ -62,24 +115,12 @@ def parser_callback_sys(option, opt_str, value, parser, *args, **kwargs):
 
 
 def parser_callback_dist(option, opt_str, value, parser, *args, **kwargs):
-    orig_distro, orig_version = head_tail(value.split(',', 1))
-    distro = orig_distro
-    for fn in (lambda x: x.lower(), lambda x: aliases_dist.get(x, x), identity):
-        if distro in supported_dists:
-            if distro != orig_distro:
-                parser.values._deferred_log = dl = getattr(parser.values,
-                                                           '_deferred_log', [])
-                dl.append((logging.INFO, "Distro `{0}' recognized as `{1}'"
-                                         .format(orig_distro, distro)))
-            break
-        distro = fn(distro)
-    else:
-        parser.values._deferred_log = dl = getattr(parser.values,
-                                                   '_deferred_log', [])
-        dl.append((logging.WARNING, "Unrecognized distro `{0}' may lead to"
-                                    " unexpected results".format(orig_distro)))
-    setattr(parser.values, option.dest, ','.join(args2sgpl(distro,
-                                                           *orig_version)))
+    parser.values._deferred_log = dl = getattr(parser.values,
+                                               '_deferred_log', [])
+    distro, version = head_tail(value.split(','))
+    setattr(parser.values, option.dest,
+            ','.join(_resolve_dist(parser.values.sys, distro, *version,
+                                   **dict(deferred_log=dl))))
 
 
 def parser_callback_list_dists(option, opt_str, value, parser):
@@ -345,7 +386,8 @@ def run(argv=None, *args):
         pass
     set_logging(opts)
     log = logging.getLogger(__name__)
-    foreach(lambda args: log.log(*args), getattr(opts, '_deferred_log', ()))
+    foreach(lambda args: log.log(*args),
+            getattr(opts, '_deferred_log', _deferred_log))
 
     cm = CommandManager.init_lookup(ext_plugins=not opts.skip_ext,
                                     ext_plugins_user=opts.ext_user,
@@ -378,7 +420,7 @@ def run(argv=None, *args):
                     " explicitly supported",
                     "# (all versions any change/update is tracked at)",
                 ))
-            print('\n'.join(acc + [format_dists(verbosity)]))
+            print('\n'.join(acc + [format_dists(verbosity, sys=_system)]))
         elif opts.completion:
             c = Completion.get_completion(opts.completion, prog,
                                           opts_common, opts_main, opts_nonmain)
